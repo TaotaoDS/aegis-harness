@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] — 2026-04-02
+
+### Major Features
+
+- **Architect file-block protocol (`===FILE: path===`)**:
+  Architect agent now writes physical code files to workspace via structured
+  `===FILE: path===` markers parsed from LLM output. New `parse_file_blocks()`
+  function, `write_file()`/`read_file()` tools, and knowledge context injection.
+  System prompt rewritten to enforce CODE PRODUCER role — specification-only
+  responses are explicitly rejected.
+
+- **RLVR Evaluator (`evaluator.py`)**:
+  New `Evaluator` class runs sandbox verification between Architect and QA:
+  validates file existence, Python syntax (`py_compile`), JS syntax (`node --check`),
+  and HTML structure. Failures produce structured error feedback injected back
+  to Architect for retry. Integrated into ResilienceManager pipeline.
+
+- **Global Knowledge Base (`knowledge_manager.py`)**:
+  New `KnowledgeManager` class implements compound learning:
+  `append_lesson()` writes bug/fix/guide entries to `global_knowledge_base.md`;
+  `load_knowledge()` injects accumulated lessons into Architect prompts before
+  each task. Lessons auto-captured after successful retries (attempt > 1).
+
+- **Configurable execution parameters** (`models_config.yaml`):
+  New `execution` block: `max_retries`, `eval_timeout`, `token_budget`,
+  `token_threshold` — all read dynamically by ResilienceManager via main.py.
+
+### Bug Fixes
+
+- **task_5 snake_game_v3 manual fix**: Produced 4 physical implementation files
+  (index.html, style.css, ui.js, app.js) addressing all 5 QA failures:
+  specification→code, historical scores list, devicePixelRatio, accessibility,
+  responsive layout.
+
+### Tests
+
+- 327 tests total (+47 new): test_architect_agent (30), test_evaluator (18),
+  test_knowledge_manager (9), test_resilience_manager (24 including evaluator/knowledge).
+
 ## [0.2.0] — 2026-04-01
 
 ### Bug Fixes

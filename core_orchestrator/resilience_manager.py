@@ -1,16 +1,26 @@
-"""Resilience manager: 3-layer escalation guard for Architect-QA loops.
+"""Resilience manager: 3-layer escalation with Evaluator and knowledge capture.
 
-Layer 1 (Context Reset):   1st QA fail → fresh Architect gateway, inject feedback
-Layer 2 (Model Escalation): 2nd QA fail → switch to escalated (advanced) gateway
-Layer 3 (Graceful Degradation): 3rd fail OR token budget >= 80% → stop, request human
+Pipeline per task:
+    Architect writes code → Evaluator runs sandbox checks
+        → PASS → QA review → PASS → done (knowledge captured if retried)
+        → FAIL → feedback to Architect → retry (up to max_retries)
+        → FAIL after max_retries → escalate to human
+
+Layer 1 (Context Reset):    1st fail → fresh Architect gateway, inject feedback
+Layer 2 (Model Escalation): 2nd fail → switch to escalated (advanced) gateway
+Layer 3 (Graceful Degradation): final fail OR token budget >= 80% → stop, request human
+
+max_retries is configurable via models_config.yaml `execution.max_retries`.
 """
 
 import json
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 import tiktoken
 
-from .architect_agent import ArchitectAgent
+from .architect_agent import ArchitectAgent, parse_file_blocks
+from .evaluator import Evaluator, EvalResult
+from .knowledge_manager import KnowledgeManager
 from .llm_gateway import LLMGateway
 from .qa_agent import QAAgent
 from .workspace_manager import WorkspaceManager
@@ -18,6 +28,7 @@ from .workspace_manager import WorkspaceManager
 _DEFAULT_MAX_RETRIES = 3
 _DEFAULT_TOKEN_BUDGET = 100_000
 _DEFAULT_TOKEN_THRESHOLD = 0.8
+_DEFAULT_EVAL_TIMEOUT = 30
 
 _encoding = tiktoken.get_encoding("cl100k_base")
 
@@ -27,7 +38,7 @@ def _count_tokens(text: str) -> int:
 
 
 class ResilienceManager:
-    """Monitors Architect-QA loops with 3-layer progressive escalation."""
+    """Monitors Architect-QA loops with Evaluator verification and 3-layer escalation."""
 
     def __init__(
         self,
@@ -39,6 +50,9 @@ class ResilienceManager:
         max_retries: int = _DEFAULT_MAX_RETRIES,
         token_budget: int = _DEFAULT_TOKEN_BUDGET,
         token_threshold: float = _DEFAULT_TOKEN_THRESHOLD,
+        eval_timeout: int = _DEFAULT_EVAL_TIMEOUT,
+        knowledge_manager: Optional[KnowledgeManager] = None,
+        knowledge_context: str = "",
     ):
         self._workspace = workspace
         self._ws_id = workspace_id
@@ -48,6 +62,9 @@ class ResilienceManager:
         self._max_retries = max_retries
         self._token_budget = token_budget
         self._token_threshold = token_threshold
+        self._eval_timeout = eval_timeout
+        self._knowledge_manager = knowledge_manager
+        self._knowledge_context = knowledge_context
         self._token_usage = 0
         self._results: List[Dict] = []
 
@@ -77,11 +94,34 @@ class ResilienceManager:
         self._workspace.write(self._ws_id, path, content)
         return path
 
+    def _capture_knowledge(
+        self, task_id: str, attempts: int, last_feedback: str
+    ) -> None:
+        """After a successful retry, extract lesson into knowledge base."""
+        if self._knowledge_manager is None:
+            return
+        if attempts <= 1:
+            # First-try pass — no lesson to learn
+            return
+
+        self._knowledge_manager.append_lesson(
+            task_id=task_id,
+            bug_root_cause=f"Failed {attempts - 1} time(s) before passing. Last feedback: {last_feedback[:500]}",
+            fix_description=f"Resolved after {attempts} attempts with escalation.",
+            avoidance_guide=f"Review feedback patterns from {task_id} before similar tasks.",
+        )
+
     def run_task_loop(self, task_id: str) -> Dict:
-        """Run the Architect-QA loop for a single task with 3-layer escalation."""
+        """Run the Architect → Evaluator → QA loop for a single task."""
         task_file = f"tasks/{task_id}.md"
         escalation_level = 0
         last_issues = ""
+
+        evaluator = Evaluator(
+            workspace=self._workspace,
+            workspace_id=self._ws_id,
+            timeout=self._eval_timeout,
+        )
 
         for attempt in range(1, self._max_retries + 1):
             # Check token budget before each attempt
@@ -101,16 +141,43 @@ class ResilienceManager:
             else:
                 arch_gateway = self._escalated_gateway_factory()
 
-            # Architect generates solution
+            # Architect generates solution (with knowledge context)
             architect = ArchitectAgent(
                 gateway=arch_gateway,
                 workspace=self._workspace,
                 workspace_id=self._ws_id,
+                knowledge_context=self._knowledge_context,
             )
             architect.solve_task(task_file)
             self._track_tokens(arch_gateway)
 
-            # QA reviews
+            # Evaluator: run sandbox checks on written files
+            written_files = architect.get_written_files(task_id)
+            if written_files:
+                eval_result = evaluator.run_eval(written_files)
+                if not eval_result.success:
+                    # Eval failed — write feedback and retry
+                    error_feedback = (
+                        f"# Evaluator Feedback: {task_id}\n\n"
+                        f"**Verdict:** FAIL (automated verification)\n\n"
+                        f"## Errors\n```\n{eval_result.error_summary()}\n```\n\n"
+                        f"---\n*Fix ALL errors above and resubmit.*\n"
+                    )
+                    self._workspace.write(
+                        self._ws_id,
+                        f"feedback/{task_id}_feedback.md",
+                        error_feedback,
+                    )
+                    last_issues = error_feedback
+
+                    # Escalate
+                    if attempt == 1:
+                        escalation_level = 1
+                    elif attempt == 2:
+                        escalation_level = 2
+                    continue  # Skip QA, go straight to retry
+
+            # QA reviews (either no files to eval, or eval passed)
             qa = QAAgent(
                 gateway=self._qa_gateway,
                 workspace=self._workspace,
@@ -120,6 +187,7 @@ class ResilienceManager:
             self._track_tokens(self._qa_gateway)
 
             if review["verdict"] == "pass":
+                self._capture_knowledge(task_id, attempt, last_issues)
                 result = {
                     "task_id": task_id, "verdict": "pass",
                     "attempts": attempt, "escalation_level": escalation_level,
@@ -130,17 +198,14 @@ class ResilienceManager:
 
             # QA failed — escalate
             last_feedback = ""
-            if self._workspace.exists(self._ws_id, f"feedback/{task_id}_feedback.md"):
-                last_feedback = self._workspace.read(
-                    self._ws_id, f"feedback/{task_id}_feedback.md"
-                )
+            fb_path = f"feedback/{task_id}_feedback.md"
+            if self._workspace.exists(self._ws_id, fb_path):
+                last_feedback = self._workspace.read(self._ws_id, fb_path)
             last_issues = last_feedback
 
             if attempt == 1:
-                # Layer 1: Context reset (next iteration creates fresh gateway)
                 escalation_level = 1
             elif attempt == 2:
-                # Layer 2: Model escalation
                 escalation_level = 2
 
         # Layer 3: All retries exhausted

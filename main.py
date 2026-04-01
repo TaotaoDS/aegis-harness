@@ -22,12 +22,15 @@ import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+import yaml
+
 from core_orchestrator.llm_gateway import LLMGateway
 from core_orchestrator.pii_sanitizer import default_pipeline
 from core_orchestrator.workspace_manager import WorkspaceManager
 from core_orchestrator.ceo_agent import CEOAgent
 from core_orchestrator.resilience_manager import ResilienceManager
 from core_orchestrator.ce_orchestrator import CEOrchestrator
+from core_orchestrator.knowledge_manager import KnowledgeManager
 
 
 WORKSPACE_ROOT = Path(__file__).parent / "workspaces"
@@ -134,6 +137,16 @@ def run_interview_loop(ceo: CEOAgent, requirement: str) -> None:
 # Phase 2: ResilienceManager — Architect ↔ QA loop with escalation
 # ---------------------------------------------------------------------------
 
+def _load_execution_config() -> Dict:
+    """Read execution parameters from models_config.yaml."""
+    config_path = Path(__file__).parent / "models_config.yaml"
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg.get("execution", {})
+    return {}
+
+
 def run_execution(
     *,
     workspace: WorkspaceManager,
@@ -141,12 +154,13 @@ def run_execution(
     llm: Optional[Callable[[str], str]] = None,
     escalated_llm: Optional[Callable[[str], str]] = None,
 ) -> Dict:
-    """Run Architect + QA on all delegated tasks via ResilienceManager.
+    """Run Architect + Evaluator + QA on all delegated tasks via ResilienceManager.
 
     Returns the ResilienceManager.status() dict:
         {"completed": [...], "escalated": [...], "token_usage": int}
     """
     sanitizer = default_pipeline()
+    exec_cfg = _load_execution_config()
 
     _llm = llm or _load_default_llm()
     _esc_llm = escalated_llm or _llm
@@ -159,15 +173,25 @@ def run_execution(
 
     qa_gateway = LLMGateway(sanitizer=sanitizer, llm=_llm)
 
+    # Knowledge base
+    km = KnowledgeManager(workspace=workspace, workspace_id=workspace_id)
+    knowledge_ctx = km.load_knowledge()
+
     rm = ResilienceManager(
         workspace=workspace,
         workspace_id=workspace_id,
         gateway_factory=gateway_factory,
         escalated_gateway_factory=escalated_gateway_factory,
         qa_gateway=qa_gateway,
+        max_retries=exec_cfg.get("max_retries", 3),
+        token_budget=exec_cfg.get("token_budget", 100_000),
+        token_threshold=exec_cfg.get("token_threshold", 0.8),
+        eval_timeout=exec_cfg.get("eval_timeout", 30),
+        knowledge_manager=km,
+        knowledge_context=knowledge_ctx,
     )
 
-    print("\n[Execution] Running Architect + QA pipeline...")
+    print("\n[Execution] Running Architect + Evaluator + QA pipeline...")
     results = rm.run_all()
 
     for r in results:

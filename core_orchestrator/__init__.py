@@ -19,7 +19,9 @@ from .llm_connector import (
 from .model_router import ModelRouter, ConfigError
 from .workspace_manager import WorkspaceManager, WorkspaceError
 from .ceo_agent import CEOAgent, CEOStateError
-from .architect_agent import ArchitectAgent
+from .architect_agent import ArchitectAgent, parse_file_blocks
+from .evaluator import Evaluator, EvalResult
+from .knowledge_manager import KnowledgeManager
 from .qa_agent import QAAgent, QAError
 from .resilience_manager import ResilienceManager
 from .ce_orchestrator import CEOrchestrator

@@ -13,14 +13,19 @@ main.py  ──>  CEO Agent (reverse interview + plan + delegate)
                 v
            Shared Workspace (file-based)
                 |
-        ┌───────┼───────────┐
-        v       v           v
-   Architect   QA    Resilience Manager
-   (solve)   (review)  (3-layer escalation)
-                            |
-                            v
-                     CE Orchestrator
-                  (5 sub-agent post-mortem)
+        ┌───────┼───────────────┐
+        v       v               v
+   Architect  Evaluator    Resilience Manager
+   (===FILE   (sandbox     (3-layer escalation
+    blocks)    verify)      + knowledge capture)
+        │       │               │
+        └── QA ─┘               v
+          (review)        Knowledge Manager
+                          (global_knowledge_base.md)
+                                │
+                                v
+                         CE Orchestrator
+                      (5 sub-agent post-mortem)
 ```
 
 ### Model-Agnostic Layer
@@ -45,9 +50,11 @@ Any provider with an OpenAI-compatible API works out of the box — just set `ba
 | Agent | Role |
 |-------|------|
 | **CEO** | Reverse-interviews the user, generates a plan, delegates tasks. Acts as a translation gateway: communicates in the user's language but produces English-only internal artifacts. |
-| **Architect** | Stateless task executor. Reads a task file, calls the LLM, writes a solution artifact. |
+| **Architect** | Code producer. Outputs `===FILE: path===` blocks; agent parses them and writes physical files to `src/`. Reads knowledge base before each task. |
+| **Evaluator** | Sandbox verifier. Runs between Architect and QA: validates file existence, Python/JS syntax, HTML structure. Failures feed back to Architect. |
 | **QA** | Binary verdict reviewer. Pass -> `approved/`, Fail -> `feedback/`. Never modifies code. |
-| **Resilience Manager** | Wraps the Architect-QA loop with 3-layer escalation: context reset, model escalation, graceful degradation. |
+| **Resilience Manager** | Wraps Architect → Evaluator → QA loop with 3-layer escalation and knowledge capture. Reads `max_retries` from config. |
+| **Knowledge Manager** | Compound learning. Auto-captures bug/fix/guide after retries; injects lessons into future Architect prompts. |
 | **CE Orchestrator** | Post-mortem analysis engine. Runs 5 independent sub-agents and writes structured post-mortem docs. |
 
 ### Key Design Decisions
@@ -277,11 +284,13 @@ enterprise-harness/
 │   ├── model_router.py                  # YAML config + route matching
 │   ├── workspace_manager.py             # File-based shared workspace
 │   ├── ceo_agent.py                     # CEO orchestrator (state machine)
-│   ├── architect_agent.py               # Architect (stateless executor)
+│   ├── architect_agent.py               # Architect (file-block code producer)
+│   ├── evaluator.py                     # Sandbox verifier (syntax + execution)
+│   ├── knowledge_manager.py             # Global knowledge base (compound learning)
 │   ├── qa_agent.py                      # QA evaluator (binary verdict)
-│   ├── resilience_manager.py            # 3-layer escalation guard
+│   ├── resilience_manager.py            # 3-layer escalation + evaluator + knowledge
 │   ├── ce_orchestrator.py               # Post-mortem analysis (5 sub-agents)
-│   └── tests/                           # 232 tests, all mock-based
+│   └── tests/                           # 327 tests, all mock-based
 │       ├── test_llm_connector.py        # 16 tests
 │       ├── test_model_router.py         # 30 tests
 │       ├── test_pii_sanitizer.py        # 30 tests

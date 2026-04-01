@@ -99,11 +99,11 @@ class TestArchitectEnglish:
     """Architect prompt must enforce English-only output."""
 
     def test_solve_prompt_contains_english_rule(self):
-        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test")
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="")
         assert ENGLISH_KEYWORD in sample
 
     def test_solve_prompt_contains_iron_rule(self):
-        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test")
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="")
         assert ENGLISH_RULE_MARKER in sample
 
     def test_prompt_sent_to_llm_enforces_english(self, tmp_path):
@@ -121,14 +121,15 @@ class TestArchitectEnglish:
         arch.solve_task("tasks/task_1.md")
         assert any(ENGLISH_KEYWORD in p for p in prompts)
 
-    def test_prompt_forbids_bulk_code_dump(self):
-        """Architect prompt must instruct against dumping all code at once."""
-        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test")
-        assert "NEVER dump all code" in sample or "NEVER dump" in sample
+    def test_prompt_forbids_specification_only(self):
+        """Architect prompt must forbid specification-only responses."""
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="")
+        assert "CODE PRODUCER" in sample or "REJECTED" in sample
 
-    def test_prompt_encourages_incremental_output(self):
-        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test")
-        assert "progressively" in sample or "incremental" in sample
+    def test_prompt_requires_file_block_protocol(self):
+        """Architect prompt must require ===FILE: path=== output format."""
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="")
+        assert "===FILE:" in sample
 
 
 # ---------------------------------------------------------------------------
