@@ -166,13 +166,22 @@ class CEOrchestrator:
             return []
         return sorted(p.name for p in self._kb_path.glob("*.md"))
 
+    @staticmethod
+    def _safe_dict(value, *, default_key: str = "items") -> Dict:
+        """Ensure *value* is a dict.  If it's a list, wrap it; if neither, empty dict."""
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list):
+            return {default_key: value}
+        return {}
+
     def _format_postmortem(self, task_id: str, merged: Dict) -> str:
         """Render merged results as a structured Markdown document."""
-        ctx = merged["context_analysis"]
-        sol = merged["solution_extraction"]
-        prev = merged["prevention_plan"]
-        clf = merged["classification"]
-        doc = merged["doc_search"]
+        ctx = self._safe_dict(merged["context_analysis"])
+        sol = self._safe_dict(merged["solution_extraction"])
+        prev = self._safe_dict(merged["prevention_plan"], default_key="strategies")
+        clf = self._safe_dict(merged["classification"])
+        doc = self._safe_dict(merged["doc_search"])
 
         tags_str = ", ".join(f"`{t}`" for t in clf.get("tags", []))
         strategies = "\n".join(

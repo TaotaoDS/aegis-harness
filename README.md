@@ -234,6 +234,18 @@ Delegating tasks to workspace...
 Done. Task files written to workspaces/default/tasks/
 ```
 
+## Checkpoint / Resume
+
+The pipeline saves progress after each stage to `workspaces/<id>/checkpoint.json`.
+If interrupted, re-run the same command to resume from where you left off:
+
+```bash
+python main.py                  # resumes automatically
+python main.py --reset          # discard checkpoint, start fresh
+```
+
+Stages: `interviewed → delegated → executed → postmortem`
+
 ## Running Tests
 
 ```bash

@@ -121,6 +121,15 @@ class TestArchitectEnglish:
         arch.solve_task("tasks/task_1.md")
         assert any(ENGLISH_KEYWORD in p for p in prompts)
 
+    def test_prompt_forbids_bulk_code_dump(self):
+        """Architect prompt must instruct against dumping all code at once."""
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test")
+        assert "NEVER dump all code" in sample or "NEVER dump" in sample
+
+    def test_prompt_encourages_incremental_output(self):
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test")
+        assert "progressively" in sample or "incremental" in sample
+
 
 # ---------------------------------------------------------------------------
 # 4. QA — English iron rule

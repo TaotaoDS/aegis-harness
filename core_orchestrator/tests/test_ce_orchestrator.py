@@ -271,3 +271,42 @@ class TestKnowledgeBaseDedup:
         ce = build_ce(workspace, knowledge_base_path=str(kb_path))
         result = ce.analyze("task_1")
         assert result["doc_search"]["action"] == "create"
+
+
+# --- _safe_dict robustness ---
+
+class TestSafeDict:
+    """_format_postmortem must tolerate list / dict / garbage sub-agent results."""
+
+    def test_dict_passthrough(self):
+        assert CEOrchestrator._safe_dict({"a": 1}) == {"a": 1}
+
+    def test_list_wrapped(self):
+        result = CEOrchestrator._safe_dict(["s1", "s2"], default_key="strategies")
+        assert result == {"strategies": ["s1", "s2"]}
+
+    def test_none_returns_empty_dict(self):
+        assert CEOrchestrator._safe_dict(None) == {}
+
+    def test_string_returns_empty_dict(self):
+        assert CEOrchestrator._safe_dict("garbage") == {}
+
+    def test_postmortem_with_list_prevention(self, workspace):
+        """Reproduce the original bug: prevention_plan comes back as a list."""
+        responses = list(ALL_RESPONSES)
+        # prevention agent returns a bare list instead of {"strategies": [...]}
+        responses[3] = json.dumps(["add tests", "code review"])
+        ce = build_ce(workspace, llm_responses=responses)
+        result = ce.analyze("task_1")
+        content = workspace.read("proj", "docs/solutions/task_1_postmortem.md")
+        assert "add tests" in content
+        assert "code review" in content
+
+    def test_postmortem_with_list_context(self, workspace):
+        """context_analysis returns a list instead of dict."""
+        responses = list(ALL_RESPONSES)
+        responses[0] = json.dumps(["item1", "item2"])
+        ce = build_ce(workspace, llm_responses=responses)
+        # Should not raise
+        result = ce.analyze("task_1")
+        assert "context_analysis" in result

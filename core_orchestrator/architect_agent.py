@@ -25,6 +25,18 @@ Requirements:
 - If writing code, use fenced code blocks with the language specified.
 - If the task is design-oriented, output a structured technical spec.
 
+CRITICAL OUTPUT RULES:
+1. NEVER dump all code in a single response. Break the solution into \
+   logical modules/files and describe each one separately.
+2. For each module, provide: file path, purpose, public API (signatures), \
+   and a concise implementation outline (≤ 40 lines of key logic).
+3. If the full implementation exceeds 120 lines, output ONLY the \
+   architecture overview, file layout, and per-file summaries — then \
+   state which files should be written first and request incremental \
+   execution via the workspace file-write tool.
+4. Prefer writing code to physical workspace files progressively rather \
+   than returning everything inline.
+
 IRON RULE: All output MUST be in English. Internal workspace artifacts \
 are strictly English-only to minimize token cost and maximize model \
 reasoning quality.
