@@ -1,11 +1,9 @@
-"""Tests for architect agent — file-block protocol, write/read tools, knowledge injection."""
-
-import json
+"""Tests for architect agent — Tool Use (Function Calling) write_file protocol."""
 
 import pytest
 
-from core_orchestrator.architect_agent import ArchitectAgent, parse_file_blocks
-from core_orchestrator.llm_gateway import LLMGateway
+from core_orchestrator.architect_agent import ArchitectAgent, WRITE_FILE_TOOL
+from core_orchestrator.llm_connector import ToolCall
 from core_orchestrator.workspace_manager import WorkspaceManager, WorkspaceError
 
 
@@ -25,20 +23,20 @@ TASK_2_CONTENT = (
     "- **Description:** Build the service layer with FastAPI\n"
 )
 
-MOCK_FILE_BLOCK_RESPONSE = (
-    "Here is the implementation:\n\n"
-    "===FILE: index.html===\n"
-    "<!DOCTYPE html>\n<html><body>Hello</body></html>\n"
-    "===FILE: style.css===\n"
-    "body { margin: 0; }\n"
-    "===END==="
-)
 
-MOCK_SINGLE_FILE_RESPONSE = (
-    "===FILE: app.py===\n"
-    "print('hello world')\n"
-    "===END==="
-)
+def make_tool_calls(files=None):
+    """Build a list of ToolCall objects simulating write_file calls."""
+    if files is None:
+        files = {"index.html": "<!DOCTYPE html>\n<html><body>Hello</body></html>",
+                 "style.css": "body { margin: 0; }"}
+    return [
+        ToolCall(name="write_file", arguments={"filepath": path, "content": content})
+        for path, content in files.items()
+    ]
+
+
+def make_single_tool_call(filepath="app.py", content="print('hello world')"):
+    return [ToolCall(name="write_file", arguments={"filepath": filepath, "content": content})]
 
 
 @pytest.fixture
@@ -55,166 +53,115 @@ def workspace_with_tasks(workspace):
     return workspace
 
 
-def build_architect(workspace, llm_response="mock solution", knowledge_context="") -> ArchitectAgent:
-    def mock_llm(text: str) -> str:
-        return llm_response
-    gateway = LLMGateway(llm=mock_llm)
+def build_architect(workspace, tool_calls=None, knowledge_context="") -> ArchitectAgent:
+    """Build an ArchitectAgent with a mock tool_llm that returns given tool calls."""
+    _calls = tool_calls if tool_calls is not None else []
+
+    def mock_tool_llm(system: str, user_prompt: str, tools):
+        return _calls
+
     return ArchitectAgent(
-        gateway=gateway, workspace=workspace, workspace_id="proj",
+        tool_llm=mock_tool_llm, workspace=workspace, workspace_id="proj",
         knowledge_context=knowledge_context,
     )
 
 
-# --- parse_file_blocks ---
+# --- Tool Use protocol ---
 
-class TestParseFileBlocks:
-    def test_extracts_two_files(self):
-        blocks = parse_file_blocks(MOCK_FILE_BLOCK_RESPONSE)
-        assert "index.html" in blocks
-        assert "style.css" in blocks
+class TestToolUseProtocol:
+    """Verify that the architect uses write_file tool calls to write files."""
 
-    def test_html_content(self):
-        blocks = parse_file_blocks(MOCK_FILE_BLOCK_RESPONSE)
-        assert "<!DOCTYPE html>" in blocks["index.html"]
+    def test_writes_files_from_tool_calls(self, workspace_with_tasks):
+        calls = make_tool_calls({"index.html": "<html>Hello</html>", "style.css": "body {}"})
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
+        arch.solve_task("tasks/task_1.md")
+        assert workspace_with_tasks.exists("proj", "deliverables/index.html")
+        assert workspace_with_tasks.exists("proj", "deliverables/style.css")
 
-    def test_css_content(self):
-        blocks = parse_file_blocks(MOCK_FILE_BLOCK_RESPONSE)
-        assert "margin: 0" in blocks["style.css"]
+    def test_file_content_correct(self, workspace_with_tasks):
+        calls = make_tool_calls({"app.py": "print('hello')"})
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
+        arch.solve_task("tasks/task_1.md")
+        content = workspace_with_tasks.read("proj", "deliverables/app.py")
+        assert "print('hello')" in content
 
-    def test_single_file(self):
-        blocks = parse_file_blocks(MOCK_SINGLE_FILE_RESPONSE)
-        assert "app.py" in blocks
-        assert "hello world" in blocks["app.py"]
+    def test_returns_artifact_path(self, workspace_with_tasks):
+        calls = make_single_tool_call()
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
+        path = arch.solve_task("tasks/task_1.md")
+        assert path == "artifacts/task_1_solution.md"
 
-    def test_empty_input(self):
-        assert parse_file_blocks("") == {}
+    def test_artifact_lists_written_files(self, workspace_with_tasks):
+        calls = make_tool_calls({"index.html": "<html></html>", "app.js": "x=1"})
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
+        arch.solve_task("tasks/task_1.md")
+        content = workspace_with_tasks.read("proj", "artifacts/task_1_solution.md")
+        assert "Written Files" in content
+        assert "index.html" in content
+        assert "app.js" in content
 
-    def test_no_file_markers(self):
-        assert parse_file_blocks("just regular text\nno markers") == {}
+    def test_zero_tool_calls_still_writes_artifact(self, workspace_with_tasks):
+        arch = build_architect(workspace_with_tasks, tool_calls=[])
+        arch.solve_task("tasks/task_1.md")
+        assert workspace_with_tasks.exists("proj", "artifacts/task_1_solution.md")
 
-    def test_path_with_subdirectory(self):
-        text = "===FILE: src/js/app.js===\nconsole.log('hi');\n===END==="
-        blocks = parse_file_blocks(text)
-        assert "src/js/app.js" in blocks
+    def test_skips_empty_filepath(self, workspace_with_tasks):
+        calls = [ToolCall(name="write_file", arguments={"filepath": "", "content": "x"})]
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
+        arch.solve_task("tasks/task_1.md")
+        assert arch.get_written_files("task_1") == []
 
-    def test_strips_quotes_from_path(self):
-        text = "===FILE: `main.py`===\npass\n===END==="
-        blocks = parse_file_blocks(text)
-        assert "main.py" in blocks
+    def test_skips_empty_content(self, workspace_with_tasks):
+        calls = [ToolCall(name="write_file", arguments={"filepath": "x.py", "content": ""})]
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
+        arch.solve_task("tasks/task_1.md")
+        assert arch.get_written_files("task_1") == []
 
-    def test_tolerates_extra_equals(self):
-        """LLM may use ==== instead of ===."""
-        text = "====FILE: app.py====\nprint('hi')\n====END===="
-        blocks = parse_file_blocks(text)
-        assert "app.py" in blocks
-        assert "print('hi')" in blocks["app.py"]
+    def test_non_write_file_calls_ignored(self, workspace_with_tasks):
+        calls = [
+            ToolCall(name="other_tool", arguments={"x": 1}),
+            ToolCall(name="write_file", arguments={"filepath": "app.py", "content": "x=1"}),
+        ]
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
+        arch.solve_task("tasks/task_1.md")
+        files = arch.get_written_files("task_1")
+        assert files == ["app.py"]
 
-    def test_tolerates_double_equals(self):
-        text = "==FILE: app.py==\nprint('hi')\n==END=="
-        blocks = parse_file_blocks(text)
-        assert "app.py" in blocks
+    def test_deliverables_prefix_not_duplicated(self, workspace_with_tasks):
+        """If tool call already includes deliverables/ prefix, don't double it."""
+        calls = [ToolCall(name="write_file", arguments={
+            "filepath": "deliverables/app.py", "content": "x=1"
+        })]
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
+        arch.solve_task("tasks/task_1.md")
+        assert workspace_with_tasks.exists("proj", "deliverables/app.py")
 
+    def test_tool_definition_has_required_fields(self):
+        """Verify WRITE_FILE_TOOL schema is well-formed."""
+        assert WRITE_FILE_TOOL["name"] == "write_file"
+        assert "parameters" in WRITE_FILE_TOOL
+        assert "filepath" in WRITE_FILE_TOOL["parameters"]["properties"]
+        assert "content" in WRITE_FILE_TOOL["parameters"]["properties"]
+        assert WRITE_FILE_TOOL["parameters"]["required"] == ["filepath", "content"]
 
-# --- Markdown fallback parsing ---
+    def test_tool_llm_receives_system_and_prompt(self, workspace_with_tasks):
+        """Verify the tool_llm callable receives system prompt and task content."""
+        captured = {}
 
-class TestMarkdownFallback:
-    """Strategy 2+3: Markdown fenced code blocks with filename annotations."""
+        def capturing_tool_llm(system, user_prompt, tools):
+            captured["system"] = system
+            captured["user_prompt"] = user_prompt
+            captured["tools"] = tools
+            return []
 
-    def test_html_comment_filename(self):
-        text = '```html\n<!-- filename: index.html -->\n<!DOCTYPE html>\n<html></html>\n```'
-        blocks = parse_file_blocks(text)
-        assert "index.html" in blocks
-        assert "<!DOCTYPE html>" in blocks["index.html"]
-        # The comment line should be stripped from content
-        assert "filename:" not in blocks["index.html"]
-
-    def test_js_comment_filename(self):
-        text = '```javascript\n// filename: app.js\nconst x = 1;\n```'
-        blocks = parse_file_blocks(text)
-        assert "app.js" in blocks
-        assert "const x = 1" in blocks["app.js"]
-
-    def test_python_comment_filename(self):
-        text = '```python\n# filename: main.py\nprint("hello")\n```'
-        blocks = parse_file_blocks(text)
-        assert "main.py" in blocks
-
-    def test_info_string_title(self):
-        text = '```html title="index.html"\n<!DOCTYPE html>\n```'
-        blocks = parse_file_blocks(text)
-        assert "index.html" in blocks
-
-    def test_info_string_paren(self):
-        text = '```css (style.css)\nbody { margin: 0; }\n```'
-        blocks = parse_file_blocks(text)
-        assert "style.css" in blocks
-
-    def test_info_string_bare_path(self):
-        text = '```javascript app.js\nconst x = 1;\n```'
-        blocks = parse_file_blocks(text)
-        assert "app.js" in blocks
-
-    def test_bold_backtick_label(self):
-        text = '**`index.html`**:\n```html\n<!DOCTYPE html>\n<html></html>\n```'
-        blocks = parse_file_blocks(text)
-        assert "index.html" in blocks
-
-    def test_backtick_colon_label(self):
-        text = '`style.css`:\n```css\nbody { margin: 0; }\n```'
-        blocks = parse_file_blocks(text)
-        assert "style.css" in blocks
-
-    def test_heading_label(self):
-        text = '### index.html\n```html\n<!DOCTYPE html>\n<html></html>\n```'
-        blocks = parse_file_blocks(text)
-        assert "index.html" in blocks
-
-    def test_multiple_markdown_blocks(self):
-        text = (
-            "Here is the code:\n\n"
-            "**`index.html`**:\n```html\n<!DOCTYPE html>\n```\n\n"
-            "**`style.css`**:\n```css\nbody {}\n```\n\n"
-            "**`app.js`**:\n```javascript\nconsole.log('hi');\n```"
+        arch = ArchitectAgent(
+            tool_llm=capturing_tool_llm, workspace=workspace_with_tasks, workspace_id="proj",
         )
-        blocks = parse_file_blocks(text)
-        assert len(blocks) == 3
-        assert "index.html" in blocks
-        assert "style.css" in blocks
-        assert "app.js" in blocks
-
-    def test_file_block_takes_priority_over_markdown(self):
-        """Strategy 1 (===FILE:===) wins even if markdown blocks also exist."""
-        text = (
-            "===FILE: real.py===\nprint('real')\n===END===\n\n"
-            "```python\n# filename: fallback.py\nprint('fallback')\n```"
-        )
-        blocks = parse_file_blocks(text)
-        assert "real.py" in blocks
-        assert "fallback.py" not in blocks
-
-    def test_empty_code_blocks_skipped(self):
-        text = '```html\n<!-- filename: empty.html -->\n\n```'
-        blocks = parse_file_blocks(text)
-        assert "empty.html" not in blocks
-
-    def test_no_filename_blocks_skipped(self):
-        """Code blocks without any filename annotation are ignored."""
-        text = '```python\nprint("hello")\n```'
-        blocks = parse_file_blocks(text)
-        assert blocks == {}
-
-    def test_mixed_strategies_in_markdown(self):
-        """Different annotation styles in the same response."""
-        text = (
-            '```html title="index.html"\n<!DOCTYPE html>\n```\n\n'
-            '`app.js`:\n```javascript\nconst x = 1;\n```\n\n'
-            '```css\n/* filename: style.css */\nbody {}\n```'
-        )
-        blocks = parse_file_blocks(text)
-        assert "index.html" in blocks
-        assert "app.js" in blocks
-        # CSS comment style not currently matched, but that's fine
-        # The test documents actual behavior
+        arch.solve_task("tasks/task_1.md")
+        assert "write_file" in captured["system"]
+        assert "Design API" in captured["user_prompt"]
+        assert len(captured["tools"]) == 1
+        assert captured["tools"][0]["name"] == "write_file"
 
 
 # --- File tools ---
@@ -259,52 +206,36 @@ class TestListTasks:
         assert arch.list_tasks() == ["tasks/task_1.md"]
 
 
-# --- Solve task with file blocks ---
+# --- Solve task with tool calls ---
 
 class TestSolveTask:
-    def test_returns_artifact_path(self, workspace_with_tasks):
-        arch = build_architect(workspace_with_tasks, llm_response=MOCK_FILE_BLOCK_RESPONSE)
-        path = arch.solve_task("tasks/task_1.md")
-        assert path == "artifacts/task_1_solution.md"
-
-    def test_writes_code_files_to_workspace(self, workspace_with_tasks):
-        arch = build_architect(workspace_with_tasks, llm_response=MOCK_FILE_BLOCK_RESPONSE)
-        arch.solve_task("tasks/task_1.md")
-        assert workspace_with_tasks.exists("proj", "deliverables/index.html")
-        assert workspace_with_tasks.exists("proj", "deliverables/style.css")
-
-    def test_artifact_lists_written_files(self, workspace_with_tasks):
-        arch = build_architect(workspace_with_tasks, llm_response=MOCK_FILE_BLOCK_RESPONSE)
-        arch.solve_task("tasks/task_1.md")
-        content = workspace_with_tasks.read("proj", "artifacts/task_1_solution.md")
-        assert "Written Files" in content
-        assert "index.html" in content
-
-    def test_no_file_blocks_still_writes_artifact(self, workspace_with_tasks):
-        arch = build_architect(workspace_with_tasks, llm_response="plain text solution")
-        arch.solve_task("tasks/task_1.md")
-        assert workspace_with_tasks.exists("proj", "artifacts/task_1_solution.md")
-
     def test_prompt_includes_task_content(self, workspace_with_tasks):
-        prompts = []
-        def capture_llm(text: str) -> str:
-            prompts.append(text)
-            return "solution"
-        gateway = LLMGateway(llm=capture_llm)
-        arch = ArchitectAgent(gateway=gateway, workspace=workspace_with_tasks, workspace_id="proj")
+        captured = {}
+
+        def capturing_tool_llm(system, user_prompt, tools):
+            captured["system"] = system
+            captured["user_prompt"] = user_prompt
+            return []
+
+        arch = ArchitectAgent(
+            tool_llm=capturing_tool_llm, workspace=workspace_with_tasks, workspace_id="proj",
+        )
         arch.solve_task("tasks/task_1.md")
-        assert any("Design API schema" in p for p in prompts)
+        assert "Design API schema" in captured["user_prompt"]
 
     def test_prompt_includes_plan_context(self, workspace_with_tasks):
         workspace_with_tasks.write("proj", "plan.md", "# Plan\n## task_1: Design API")
-        prompts = []
-        def capture_llm(text: str) -> str:
-            prompts.append(text)
-            return "solution"
-        gateway = LLMGateway(llm=capture_llm)
-        arch = ArchitectAgent(gateway=gateway, workspace=workspace_with_tasks, workspace_id="proj")
+        captured = {}
+
+        def capturing_tool_llm(system, user_prompt, tools):
+            captured["system"] = system
+            return []
+
+        arch = ArchitectAgent(
+            tool_llm=capturing_tool_llm, workspace=workspace_with_tasks, workspace_id="proj",
+        )
         arch.solve_task("tasks/task_1.md")
-        assert any("Plan" in p for p in prompts)
+        assert "Plan" in captured["system"]
 
     def test_nonexistent_task_raises(self, workspace):
         arch = build_architect(workspace)
@@ -313,56 +244,61 @@ class TestSolveTask:
 
     def test_prompt_includes_feedback(self, workspace_with_tasks):
         workspace_with_tasks.write("proj", "feedback/task_1_feedback.md", "Missing auth handling")
-        prompts = []
-        def capture_llm(text: str) -> str:
-            prompts.append(text)
-            return "solution"
-        gateway = LLMGateway(llm=capture_llm)
-        arch = ArchitectAgent(gateway=gateway, workspace=workspace_with_tasks, workspace_id="proj")
+        captured = {}
+
+        def capturing_tool_llm(system, user_prompt, tools):
+            captured["system"] = system
+            return []
+
+        arch = ArchitectAgent(
+            tool_llm=capturing_tool_llm, workspace=workspace_with_tasks, workspace_id="proj",
+        )
         arch.solve_task("tasks/task_1.md")
-        assert any("Missing auth" in p for p in prompts)
+        assert "Missing auth" in captured["system"]
 
 
 # --- Knowledge context injection ---
 
 class TestKnowledgeInjection:
     def test_knowledge_injected_into_prompt(self, workspace_with_tasks):
-        prompts = []
-        def capture_llm(text: str) -> str:
-            prompts.append(text)
-            return "solution"
-        gateway = LLMGateway(llm=capture_llm)
+        captured = {}
+
+        def capturing_tool_llm(system, user_prompt, tools):
+            captured["system"] = system
+            return []
+
         arch = ArchitectAgent(
-            gateway=gateway, workspace=workspace_with_tasks, workspace_id="proj",
+            tool_llm=capturing_tool_llm, workspace=workspace_with_tasks, workspace_id="proj",
             knowledge_context="Always use devicePixelRatio for canvas.",
         )
         arch.solve_task("tasks/task_1.md")
-        assert any("devicePixelRatio" in p for p in prompts)
+        assert "devicePixelRatio" in captured["system"]
 
     def test_empty_knowledge_no_section(self, workspace_with_tasks):
-        prompts = []
-        def capture_llm(text: str) -> str:
-            prompts.append(text)
-            return "solution"
-        gateway = LLMGateway(llm=capture_llm)
+        captured = {}
+
+        def capturing_tool_llm(system, user_prompt, tools):
+            captured["system"] = system
+            return []
+
         arch = ArchitectAgent(
-            gateway=gateway, workspace=workspace_with_tasks, workspace_id="proj",
+            tool_llm=capturing_tool_llm, workspace=workspace_with_tasks, workspace_id="proj",
             knowledge_context="",
         )
         arch.solve_task("tasks/task_1.md")
-        assert not any("Knowledge Base" in p for p in prompts)
+        assert "Knowledge Base" not in captured["system"]
 
 
 # --- Solve all ---
 
 class TestSolveAll:
     def test_returns_all_artifact_paths(self, workspace_with_tasks):
-        arch = build_architect(workspace_with_tasks, llm_response="solution")
+        arch = build_architect(workspace_with_tasks, tool_calls=[])
         paths = arch.solve_all()
         assert sorted(paths) == ["artifacts/task_1_solution.md", "artifacts/task_2_solution.md"]
 
     def test_empty_tasks_returns_empty(self, workspace):
-        arch = build_architect(workspace, llm_response="solution")
+        arch = build_architect(workspace, tool_calls=[])
         assert arch.solve_all() == []
 
 
@@ -370,7 +306,8 @@ class TestSolveAll:
 
 class TestGetWrittenFiles:
     def test_returns_written_files(self, workspace_with_tasks):
-        arch = build_architect(workspace_with_tasks, llm_response=MOCK_FILE_BLOCK_RESPONSE)
+        calls = make_tool_calls({"index.html": "<html></html>", "style.css": "body {}"})
+        arch = build_architect(workspace_with_tasks, tool_calls=calls)
         arch.solve_task("tasks/task_1.md")
         files = arch.get_written_files("task_1")
         assert "index.html" in files
@@ -380,7 +317,53 @@ class TestGetWrittenFiles:
         arch = build_architect(workspace)
         assert arch.get_written_files("task_999") == []
 
-    def test_empty_when_no_file_blocks(self, workspace_with_tasks):
-        arch = build_architect(workspace_with_tasks, llm_response="plain text")
+    def test_empty_when_no_tool_calls(self, workspace_with_tasks):
+        arch = build_architect(workspace_with_tasks, tool_calls=[])
         arch.solve_task("tasks/task_1.md")
         assert arch.get_written_files("task_1") == []
+
+
+# --- Event bus integration ---
+
+class TestEventBusIntegration:
+    def test_emits_solving_event(self, workspace_with_tasks):
+        from core_orchestrator.event_bus import ListBus
+        bus = ListBus()
+
+        def mock_tool_llm(system, user_prompt, tools):
+            return make_single_tool_call()
+
+        arch = ArchitectAgent(
+            tool_llm=mock_tool_llm, workspace=workspace_with_tasks,
+            workspace_id="proj", bus=bus,
+        )
+        arch.solve_task("tasks/task_1.md")
+        events = [e[0] for e in bus.events]
+        assert "architect.solving" in events
+        assert "architect.llm_response" in events
+        assert "architect.files_written" in events
+
+    def test_emits_zero_files_event(self, workspace_with_tasks):
+        from core_orchestrator.event_bus import ListBus
+        bus = ListBus()
+
+        arch = ArchitectAgent(
+            tool_llm=lambda s, p, t: [], workspace=workspace_with_tasks,
+            workspace_id="proj", bus=bus,
+        )
+        arch.solve_task("tasks/task_1.md")
+        events = [e[0] for e in bus.events]
+        assert "architect.zero_files" in events
+
+    def test_emits_file_written_per_file(self, workspace_with_tasks):
+        from core_orchestrator.event_bus import ListBus
+        bus = ListBus()
+        calls = make_tool_calls({"a.py": "x=1", "b.py": "y=2"})
+
+        arch = ArchitectAgent(
+            tool_llm=lambda s, p, t: calls, workspace=workspace_with_tasks,
+            workspace_id="proj", bus=bus,
+        )
+        arch.solve_task("tasks/task_1.md")
+        file_written_events = [e for e in bus.events if e[0] == "architect.file_written"]
+        assert len(file_written_events) == 2

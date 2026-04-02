@@ -6,19 +6,19 @@ Pipeline per task:
         → FAIL → feedback to Architect → retry (up to max_retries)
         → FAIL after max_retries → escalate to human
 
-Layer 1 (Context Reset):    1st fail → fresh Architect gateway, inject feedback
-Layer 2 (Model Escalation): 2nd fail → switch to escalated (advanced) gateway
+Layer 1 (Context Reset):    1st fail → inject feedback, retry with same tool_llm
+Layer 2 (Model Escalation): 2nd fail → switch to escalated tool_llm
 Layer 3 (Graceful Degradation): final fail OR token budget >= 80% → stop, request human
 
 max_retries is configurable via models_config.yaml `execution.max_retries`.
 """
 
 import json
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import tiktoken
 
-from .architect_agent import ArchitectAgent, parse_file_blocks
+from .architect_agent import ArchitectAgent, ToolLLM
 from .evaluator import Evaluator, EvalResult
 from .knowledge_manager import KnowledgeManager
 from .llm_gateway import LLMGateway
@@ -44,8 +44,7 @@ class ResilienceManager:
         self,
         workspace: WorkspaceManager,
         workspace_id: str,
-        gateway_factory: Callable[[], LLMGateway],
-        escalated_gateway_factory: Callable[[], LLMGateway],
+        tool_llm: ToolLLM,
         qa_gateway: LLMGateway,
         max_retries: int = _DEFAULT_MAX_RETRIES,
         token_budget: int = _DEFAULT_TOKEN_BUDGET,
@@ -54,12 +53,13 @@ class ResilienceManager:
         knowledge_manager: Optional[KnowledgeManager] = None,
         knowledge_context: str = "",
         bus=None,
+        escalated_tool_llm: Optional[ToolLLM] = None,
     ):
         from .event_bus import NullBus
         self._workspace = workspace
         self._ws_id = workspace_id
-        self._gateway_factory = gateway_factory
-        self._escalated_gateway_factory = escalated_gateway_factory
+        self._tool_llm = tool_llm
+        self._escalated_tool_llm = escalated_tool_llm or tool_llm
         self._qa_gateway = qa_gateway
         self._max_retries = max_retries
         self._token_budget = token_budget
@@ -152,11 +152,11 @@ class ResilienceManager:
                 self._results.append(result)
                 return result
 
-            # Select gateway based on escalation level
-            if escalation_level < 2:
-                arch_gateway = self._gateway_factory()
-            else:
-                arch_gateway = self._escalated_gateway_factory()
+            # Select tool_llm based on escalation level
+            current_tool_llm = (
+                self._escalated_tool_llm if escalation_level >= 2
+                else self._tool_llm
+            )
             self._bus.emit(
                 "resilience.gateway_selected",
                 task_id=task_id,
@@ -164,16 +164,15 @@ class ResilienceManager:
                 is_escalated=(escalation_level >= 2),
             )
 
-            # Architect generates solution (with knowledge context)
+            # Architect generates solution via Tool Use (with knowledge context)
             architect = ArchitectAgent(
-                gateway=arch_gateway,
+                tool_llm=current_tool_llm,
                 workspace=self._workspace,
                 workspace_id=self._ws_id,
                 knowledge_context=self._knowledge_context,
                 bus=self._bus,
             )
             architect.solve_task(task_file)
-            self._track_tokens(arch_gateway)
             self._bus.emit("architect.solve_complete", task_id=task_id, attempt=attempt)
 
             # Evaluator: run sandbox checks on written files
@@ -191,10 +190,11 @@ class ResilienceManager:
                     f"# Evaluator Feedback: {task_id}\n\n"
                     f"**Verdict:** FAIL (zero files produced)\n\n"
                     f"## Error\n"
-                    f"Architect produced 0 code files. The ===FILE: path=== "
-                    f"protocol was not followed — no file blocks were found "
-                    f"in the LLM output.\n\n"
-                    f"You MUST output code using ===FILE: path=== markers.\n\n"
+                    f"Architect produced 0 code files. The write_file tool "
+                    f"was not called -- no file writes were found "
+                    f"in the LLM tool call output.\n\n"
+                    f"You MUST call write_file(filepath, content) for every "
+                    f"code file you produce.\n\n"
                     f"---\n*Resubmit with actual code files.*\n"
                 )
                 self._workspace.write(

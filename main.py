@@ -153,10 +153,14 @@ def run_execution(
     workspace: WorkspaceManager,
     workspace_id: str,
     llm: Optional[Callable[[str], str]] = None,
-    escalated_llm: Optional[Callable[[str], str]] = None,
+    tool_llm=None,
+    escalated_tool_llm=None,
     bus=None,
 ) -> Dict:
     """Run Architect + Evaluator + QA on all delegated tasks via ResilienceManager.
+
+    The Architect uses Tool Use (Function Calling) via tool_llm.
+    QA uses a standard text gateway via llm.
 
     Returns the ResilienceManager.status() dict:
         {"completed": [...], "escalated": [...], "token_usage": int}
@@ -165,13 +169,8 @@ def run_execution(
     exec_cfg = _load_execution_config()
 
     _llm = llm or _load_default_llm()
-    _esc_llm = escalated_llm or _llm
-
-    def gateway_factory() -> LLMGateway:
-        return LLMGateway(sanitizer=sanitizer, llm=_llm)
-
-    def escalated_gateway_factory() -> LLMGateway:
-        return LLMGateway(sanitizer=sanitizer, llm=_esc_llm)
+    _tool_llm = tool_llm or _make_tool_llm_from_text_llm(_llm)
+    _esc_tool_llm = escalated_tool_llm or _tool_llm
 
     qa_gateway = LLMGateway(sanitizer=sanitizer, llm=_llm)
 
@@ -182,8 +181,7 @@ def run_execution(
     rm = ResilienceManager(
         workspace=workspace,
         workspace_id=workspace_id,
-        gateway_factory=gateway_factory,
-        escalated_gateway_factory=escalated_gateway_factory,
+        tool_llm=_tool_llm,
         qa_gateway=qa_gateway,
         max_retries=exec_cfg.get("max_retries", 3),
         token_budget=exec_cfg.get("token_budget", 100_000),
@@ -192,6 +190,7 @@ def run_execution(
         knowledge_manager=km,
         knowledge_context=knowledge_ctx,
         bus=bus,
+        escalated_tool_llm=_esc_tool_llm,
     )
 
     print("\n[Execution] Running Architect + Evaluator + QA pipeline...")
@@ -263,6 +262,49 @@ def _load_default_llm() -> Callable[[str], str]:
     config_path = Path(__file__).parent / "models_config.yaml"
     router = ModelRouter(config_path)
     return router.as_llm()
+
+
+def _load_default_tool_llm():
+    """Load the default Tool Use LLM from models_config.yaml."""
+    from core_orchestrator.model_router import ModelRouter
+
+    config_path = Path(__file__).parent / "models_config.yaml"
+    router = ModelRouter(config_path)
+    return router.as_tool_llm()
+
+
+def _make_tool_llm_from_text_llm(text_llm: Callable[[str], str]):
+    """Wrap a text-based LLM callable into a tool_llm callable.
+
+    This is a compatibility shim for tests that provide a simple text LLM.
+    It calls the text LLM and parses the response using a lightweight regex
+    fallback to extract file blocks from the text output.
+    """
+    import re
+    from core_orchestrator.llm_connector import ToolCall
+
+    _FILE_BLOCK_RE = re.compile(
+        r"={2,4}\s*FILE:\s*(.+?)\s*={2,4}\s*\n(.*?)(?=\n={2,4}\s*(?:FILE:|END)\s*={0,4}|$)",
+        re.DOTALL,
+    )
+
+    def _tool_llm(system: str, user_prompt: str, tools):
+        # Combine system + user into a single text prompt for the text LLM
+        combined = f"{system}\n\n{user_prompt}"
+        response = text_llm(combined)
+        # Parse ===FILE: path=== blocks from text response
+        matches = _FILE_BLOCK_RE.findall(response)
+        calls = []
+        for path, content in matches:
+            clean_path = path.strip().strip("`'\"")
+            if clean_path:
+                calls.append(ToolCall(
+                    name="write_file",
+                    arguments={"filepath": clean_path, "content": content.rstrip()},
+                ))
+        return calls
+
+    return _tool_llm
 
 
 def _print_summary(status: Dict, ws_id: str) -> None:

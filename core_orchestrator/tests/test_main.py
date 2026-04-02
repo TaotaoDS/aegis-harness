@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from core_orchestrator.llm_connector import ToolCall
 from core_orchestrator.llm_gateway import LLMGateway
 from core_orchestrator.workspace_manager import WorkspaceManager
 
@@ -27,7 +28,17 @@ def _make_sequenced_llm(responses):
     return mock_llm
 
 
-FILE_BLOCK_RESPONSE = "===FILE: app.py===\nprint('hello')\n===END==="
+def _make_write_file_tool_llm(files=None):
+    """Return a tool_llm that produces write_file calls."""
+    if files is None:
+        files = {"app.py": "print('hello')"}
+
+    def tool_llm(system, user_prompt, tools):
+        return [
+            ToolCall(name="write_file", arguments={"filepath": p, "content": c})
+            for p, c in files.items()
+        ]
+    return tool_llm
 
 
 # CEO phase responses (interview done immediately + 2 tasks)
@@ -170,16 +181,13 @@ class TestRunExecution:
         from main import run_execution
 
         ws = self._setup_workspace_with_tasks(tmp_path)
-
-        # Architect returns file blocks, QA passes on first try
-        def exec_llm(text):
-            if "architect" in text.lower() or "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return json.dumps({"verdict": "pass", "issues": [], "notes": "LGTM"})
+        tool_llm = _make_write_file_tool_llm({"app.py": "print('hello')"})
+        qa_llm = lambda text: json.dumps({"verdict": "pass", "issues": [], "notes": "LGTM"})
 
         run_execution(
             workspace=ws, workspace_id="default",
-            llm=exec_llm,
+            llm=qa_llm,
+            tool_llm=tool_llm,
         )
 
         # Artifacts should exist for both tasks
@@ -190,15 +198,13 @@ class TestRunExecution:
         from main import run_execution
 
         ws = self._setup_workspace_with_tasks(tmp_path)
-
-        def exec_llm(text):
-            if "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return json.dumps({"verdict": "pass", "issues": [], "notes": "ok"})
+        tool_llm = _make_write_file_tool_llm({"app.py": "x = 1"})
+        qa_llm = lambda text: json.dumps({"verdict": "pass", "issues": [], "notes": "ok"})
 
         status = run_execution(
             workspace=ws, workspace_id="default",
-            llm=exec_llm,
+            llm=qa_llm,
+            tool_llm=tool_llm,
         )
 
         assert "completed" in status
@@ -209,20 +215,17 @@ class TestRunExecution:
         from main import run_execution
 
         ws = self._setup_workspace_with_tasks(tmp_path)
-
-        # Architect returns file blocks but QA always fails
-        def failing_llm(text):
-            if "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return json.dumps({
-                "verdict": "fail",
-                "issues": ["Incomplete implementation"],
-                "notes": "Not good enough",
-            })
+        tool_llm = _make_write_file_tool_llm({"app.py": "x = 1"})
+        qa_llm = lambda text: json.dumps({
+            "verdict": "fail",
+            "issues": ["Incomplete implementation"],
+            "notes": "Not good enough",
+        })
 
         status = run_execution(
             workspace=ws, workspace_id="default",
-            llm=failing_llm,
+            llm=qa_llm,
+            tool_llm=tool_llm,
         )
 
         # All tasks should be escalated
@@ -233,13 +236,14 @@ class TestRunExecution:
         from main import run_execution
 
         ws = self._setup_workspace_with_tasks(tmp_path)
+        tool_llm = _make_write_file_tool_llm({"app.py": "x = 1"})
+        qa_llm = lambda text: json.dumps({"verdict": "fail", "issues": ["bug"], "notes": "no"})
 
-        def failing_llm(text):
-            if "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return json.dumps({"verdict": "fail", "issues": ["bug"], "notes": "no"})
-
-        run_execution(workspace=ws, workspace_id="default", llm=failing_llm)
+        run_execution(
+            workspace=ws, workspace_id="default",
+            llm=qa_llm,
+            tool_llm=tool_llm,
+        )
 
         assert ws.exists("default", "escalations/task_1_escalation.md")
         assert ws.exists("default", "escalations/task_2_escalation.md")
@@ -259,13 +263,14 @@ class TestRunPostmortem:
         ceo.delegate()
 
         ws = WorkspaceManager(tmp_path, isolated=True)
+        tool_llm = _make_write_file_tool_llm({"app.py": "print('hello')"})
+        qa_llm = lambda text: json.dumps({"verdict": "pass", "issues": [], "notes": "LGTM"})
 
-        def exec_llm(text):
-            if "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return json.dumps({"verdict": "pass", "issues": [], "notes": "LGTM"})
-
-        run_execution(workspace=ws, workspace_id="default", llm=exec_llm)
+        run_execution(
+            workspace=ws, workspace_id="default",
+            llm=qa_llm,
+            tool_llm=tool_llm,
+        )
         return ws
 
     def test_postmortem_writes_docs(self, tmp_path):
@@ -322,7 +327,7 @@ class TestRunPostmortem:
 
 class TestFullPipeline:
     def test_end_to_end(self, tmp_path):
-        """Full pipeline: CEO → delegate → execute → postmortem."""
+        """Full pipeline: CEO -> delegate -> execute -> postmortem."""
         from main import build_pipeline, run_interview_loop, run_execution, run_postmortem
 
         # Phase 1: CEO interview + plan + delegate
@@ -332,13 +337,15 @@ class TestFullPipeline:
 
         ws = WorkspaceManager(tmp_path, isolated=True)
 
-        # Phase 2: Architect + QA (pass on first try)
-        def exec_llm(text):
-            if "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return json.dumps({"verdict": "pass", "issues": [], "notes": "ok"})
+        # Phase 2: Architect (Tool Use) + QA (pass on first try)
+        tool_llm = _make_write_file_tool_llm({"app.py": "print('hello')"})
+        qa_llm = lambda text: json.dumps({"verdict": "pass", "issues": [], "notes": "ok"})
 
-        status = run_execution(workspace=ws, workspace_id="default", llm=exec_llm)
+        status = run_execution(
+            workspace=ws, workspace_id="default",
+            llm=qa_llm,
+            tool_llm=tool_llm,
+        )
         assert len(status["completed"]) == 2
         assert len(status["escalated"]) == 0
 

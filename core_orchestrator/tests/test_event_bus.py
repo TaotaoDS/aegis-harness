@@ -271,12 +271,14 @@ class TestAgentIntegration:
 
     def test_architect_emits_events(self, workspace):
         from core_orchestrator.architect_agent import ArchitectAgent
-        from core_orchestrator.llm_gateway import LLMGateway
+        from core_orchestrator.llm_connector import ToolCall
 
         bus = ListBus()
-        gateway = LLMGateway(llm=lambda t: "===FILE: app.py===\nx = 1\n===END===")
+        tool_llm = lambda s, p, t: [
+            ToolCall(name="write_file", arguments={"filepath": "app.py", "content": "x = 1"})
+        ]
         arch = ArchitectAgent(
-            gateway=gateway, workspace=workspace, workspace_id="proj", bus=bus,
+            tool_llm=tool_llm, workspace=workspace, workspace_id="proj", bus=bus,
         )
         arch.solve_task("tasks/task_1.md")
         event_names = [e[0] for e in bus.events]

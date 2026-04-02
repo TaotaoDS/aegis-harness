@@ -10,12 +10,12 @@ via base_url_env, and allows per-model temperature configuration.
 
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import yaml
 from dotenv import load_dotenv
 
-from .llm_connector import get_connector
+from .llm_connector import ToolCall, get_connector
 
 _DEFAULT_TEMPERATURE = 0.7
 
@@ -107,6 +107,41 @@ class ModelRouter:
             base_url=base_url,
         )
 
+    def call_with_tools(
+        self,
+        model_name: str,
+        *,
+        system: str,
+        user_prompt: str,
+        tools: List[Dict[str, Any]],
+        max_rounds: int = 10,
+    ) -> List[ToolCall]:
+        """Call a model with Tool Use (Function Calling).
+
+        Returns a list of ToolCall objects collected across all rounds.
+        """
+        model_cfg = self._models.get(model_name)
+        if not model_cfg:
+            raise ConfigError(f"Unknown model: '{model_name}'")
+
+        api_key = self.get_api_key(model_name)
+        base_url = self._get_base_url(model_name)
+        temperature = model_cfg.get("temperature", _DEFAULT_TEMPERATURE)
+
+        connector = get_connector(model_cfg["provider"])
+
+        return connector.call_with_tools(
+            model_id=model_cfg["model_id"],
+            api_key=api_key,
+            system=system,
+            user_prompt=user_prompt,
+            tools=tools,
+            max_tokens=model_cfg["max_tokens"],
+            temperature=temperature,
+            base_url=base_url,
+            max_rounds=max_rounds,
+        )
+
     def as_llm(self, **context: str) -> Callable[[str], str]:
         """Return a Callable[[str], str] suitable for LLMGateway(llm=...).
 
@@ -118,3 +153,26 @@ class ModelRouter:
             return self.call(model_name, text)
 
         return _llm
+
+    def as_tool_llm(self, **context: str) -> Callable:
+        """Return a callable for Tool Use calls.
+
+        Signature: (system: str, user_prompt: str, tools: List[Dict]) -> List[ToolCall]
+
+        The model is resolved once at creation time based on the context.
+        """
+        model_name = self.resolve(**context)
+
+        def _tool_llm(
+            system: str,
+            user_prompt: str,
+            tools: List[Dict[str, Any]],
+        ) -> List[ToolCall]:
+            return self.call_with_tools(
+                model_name,
+                system=system,
+                user_prompt=user_prompt,
+                tools=tools,
+            )
+
+        return _tool_llm

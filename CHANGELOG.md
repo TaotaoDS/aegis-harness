@@ -2,43 +2,72 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.5.1] — 2026-04-02
+## [0.6.0] — 2026-04-02
 
-### Bug Fixes
+### Breaking Changes
 
-- **Multi-strategy file parser for `parse_file_blocks()`** (`architect_agent.py`):
-  Fixed ZERO_FILES failures caused by LLM returning standard Markdown code blocks
-  instead of the `===FILE: path===` protocol. New 3-tier fallback chain:
-  1. `===FILE: path===` protocol (primary, now tolerates 2-4 equals signs)
-  2. Markdown fenced code blocks with filename annotations:
-     `title="path"`, `(path)`, bare path in info string, or
-     `<!-- filename: path -->` / `// filename: path` / `# filename: path` comment
-  3. Pre-context label detection: `**\`path\`**:`, `` `path`: ``, `### path`
+- **Architect agent refactored to native Tool Use (Function Calling)**
+  (`architect_agent.py`):
+  The fragile regex-based `parse_file_blocks()` text parser has been
+  **completely deleted** and replaced with LLM native Tool Use.
 
-  Helper functions added: `_looks_like_filepath()`, `_clean_path()`,
-  `_extract_filename_from_comment()`, `_strip_filename_comment()`,
-  `_get_pre_context()`, `_strategy_file_blocks()`, `_strategy_markdown_blocks()`.
+  A `write_file(filepath, content)` tool is registered with the LLM via the
+  provider's tools API parameter. The system prompt enforces that ALL code
+  must be submitted via `write_file` tool calls — inline code blocks are
+  explicitly forbidden.
 
-- **Duplicate `parse_file_blocks` definition removed**: The old single-strategy
-  definition (lines 245-257) was silently overwriting the new multi-strategy
-  version, causing all Markdown fallback paths to be unreachable at runtime
-  despite passing direct Python execution tests.
+  **ArchitectAgent constructor change:**
+  ```python
+  # Before (v0.5.x):
+  ArchitectAgent(gateway=LLMGateway, workspace=..., ...)
+  # After (v0.6.0):
+  ArchitectAgent(tool_llm=Callable, workspace=..., ...)
+  ```
 
-- **Fenced block regex pre-context fix**: Removed greedy `((?:.*\n){0,2})`
-  capture group from `_FENCED_BLOCK_RE` that consumed content across multiple
-  code blocks. Pre-context is now extracted via `_get_pre_context()` using
-  `match.start()` position, correctly handling multi-block responses.
+  `tool_llm` signature: `(system: str, user_prompt: str, tools: List[Dict]) -> List[ToolCall]`
 
-- **Diagnostic event on parse failure**: When Architect returns non-empty
-  content but no files are extracted, emits `architect.parse_failed` event
-  with first 200 chars of response for observability debugging.
+- **ResilienceManager constructor change:**
+  Replaced `gateway_factory` / `escalated_gateway_factory` with
+  `tool_llm` / `escalated_tool_llm` for the Architect. QA gateway unchanged.
+
+- **`run_execution()` accepts `tool_llm` parameter:**
+  New optional `tool_llm` and `escalated_tool_llm` kwargs. For backward
+  compatibility with text-based LLMs, `_make_tool_llm_from_text_llm()` shim
+  wraps a `Callable[[str], str]` into a tool_llm by parsing `===FILE:===`
+  blocks from the text response.
+
+### Major Features
+
+- **`ToolCall` dataclass** (`llm_connector.py`):
+  Provider-agnostic representation of a tool invocation with `name` and
+  `arguments` fields.
+
+- **`call_with_tools()` on both connectors** (`llm_connector.py`):
+  Multi-turn tool loop implementation for OpenAI and Anthropic APIs.
+  Handles provider-specific tool schema conversion (OpenAI `functions` format
+  vs Anthropic `input_schema` format) and result feeding across rounds.
+  Loops until `stop` / `end_turn` or `max_rounds` (default 10).
+
+- **`ModelRouter.call_with_tools()` + `as_tool_llm()`** (`model_router.py`):
+  Router-level tool dispatch and factory method for creating tool_llm
+  callables bound to a resolved model.
+
+- **`WRITE_FILE_TOOL` schema** (`architect_agent.py`):
+  Provider-agnostic tool definition exported for external use and testing.
+
+### Deleted
+
+- `parse_file_blocks()` — all regex-based file extraction (3-tier strategy
+  chain, `_FILE_BLOCK_RE`, `_FENCED_BLOCK_RE`, `_LABEL_RE`, etc.)
+- All related helper functions (`_looks_like_filepath`, `_clean_path`,
+  `_extract_filename_from_comment`, `_strip_filename_comment`,
+  `_get_pre_context`, `_strategy_file_blocks`, `_strategy_markdown_blocks`)
 
 ### Tests
 
-- 400 tests total (+14 new): TestMarkdownFallback class covers all annotation
-  strategies — HTML/JS/Python filename comments, info string title/paren/bare
-  path, bold-backtick/backtick-colon/heading labels, multi-block extraction,
-  mixed strategies, priority ordering, and edge cases.
+- 386 tests total: deleted 24 regex parser tests (TestParseFileBlocks,
+  TestMarkdownFallback), added 10 Tool Use protocol tests
+  (TestToolUseProtocol, TestEventBusIntegration).
 
 ## [0.5.0] — 2026-04-02
 

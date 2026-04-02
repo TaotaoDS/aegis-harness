@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from core_orchestrator.llm_connector import ToolCall
 from core_orchestrator.workspace_manager import WorkspaceManager
 
 # We import the checkpoint helpers from main
@@ -27,6 +28,19 @@ def _make_sequenced_llm(responses):
     return mock_llm
 
 
+def _make_write_file_tool_llm(files=None):
+    """Return a tool_llm that produces write_file calls."""
+    if files is None:
+        files = {"app.py": "print('hello')"}
+
+    def tool_llm(system, user_prompt, tools):
+        return [
+            ToolCall(name="write_file", arguments={"filepath": p, "content": c})
+            for p, c in files.items()
+        ]
+    return tool_llm
+
+
 CEO_RESPONSES = [
     json.dumps({"question": "", "done": True}),
     json.dumps({"tasks": [
@@ -35,7 +49,6 @@ CEO_RESPONSES = [
 ]
 
 PASS_QA = json.dumps({"verdict": "pass", "issues": [], "notes": "ok"})
-FILE_BLOCK_RESPONSE = "===FILE: app.py===\nprint('hello')\n===END==="
 
 CE_RESPONSES = [
     json.dumps({"problem_type": "design", "components": ["api"], "severity": "low"}),
@@ -127,12 +140,14 @@ class TestResumeFromDelegated:
         cp = load_checkpoint(ws, "default")
         assert cp["stage"] == "delegated"
 
-        def exec_llm(text):
-            if "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return PASS_QA
+        tool_llm = _make_write_file_tool_llm({"app.py": "x = 1"})
+        qa_llm = lambda text: PASS_QA
 
-        status = run_execution(workspace=ws, workspace_id="default", llm=exec_llm)
+        status = run_execution(
+            workspace=ws, workspace_id="default",
+            llm=qa_llm,
+            tool_llm=tool_llm,
+        )
         assert len(status["completed"]) == 1
 
 
@@ -149,13 +164,15 @@ class TestResumeFromExecuted:
         run_interview_loop(ceo, "Build API")
         ceo.delegate()
 
-        def exec_llm(text):
-            if "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return PASS_QA
+        tool_llm = _make_write_file_tool_llm({"app.py": "x = 1"})
+        qa_llm = lambda text: PASS_QA
 
         ws = ceo._workspace
-        run_execution(workspace=ws, workspace_id="default", llm=exec_llm)
+        run_execution(
+            workspace=ws, workspace_id="default",
+            llm=qa_llm,
+            tool_llm=tool_llm,
+        )
         save_checkpoint(ws, "default", stage="executed", requirement="Build API",
                         execution_status={"completed": ["task_1"], "escalated": [], "token_usage": 100})
 
@@ -209,13 +226,14 @@ class TestFullPipelineWithCheckpoints:
 
         # Phase 2
         ws = ceo._workspace
+        tool_llm = _make_write_file_tool_llm({"app.py": "x = 1"})
+        qa_llm = lambda text: PASS_QA
 
-        def exec_llm(text):
-            if "## Task" in text:
-                return FILE_BLOCK_RESPONSE
-            return PASS_QA
-
-        status = run_execution(workspace=ws, workspace_id="default", llm=exec_llm)
+        status = run_execution(
+            workspace=ws, workspace_id="default",
+            llm=qa_llm,
+            tool_llm=tool_llm,
+        )
         save_checkpoint(ws, "default", stage="executed", requirement="Build API",
                         execution_status=status)
         assert load_checkpoint(ws, "default")["stage"] == "executed"

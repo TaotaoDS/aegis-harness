@@ -107,29 +107,28 @@ class TestArchitectEnglish:
         assert ENGLISH_RULE_MARKER in sample
 
     def test_prompt_sent_to_llm_enforces_english(self, tmp_path):
-        prompts = []
+        captured = {}
 
-        def capture(text):
-            prompts.append(text)
-            return "solution"
+        def capture_tool_llm(system, user_prompt, tools):
+            captured["system"] = system
+            return []
 
         wm = WorkspaceManager(tmp_path)
         wm.create("proj")
         wm.write("proj", "tasks/task_1.md", "# Task 1\n- **ID:** task_1\n")
-        gw = LLMGateway(llm=capture)
-        arch = ArchitectAgent(gateway=gw, workspace=wm, workspace_id="proj")
+        arch = ArchitectAgent(tool_llm=capture_tool_llm, workspace=wm, workspace_id="proj")
         arch.solve_task("tasks/task_1.md")
-        assert any(ENGLISH_KEYWORD in p for p in prompts)
+        assert ENGLISH_KEYWORD in captured["system"]
 
     def test_prompt_forbids_specification_only(self):
         """Architect prompt must forbid specification-only responses."""
         sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="")
         assert "CODE PRODUCER" in sample or "REJECTED" in sample
 
-    def test_prompt_requires_file_block_protocol(self):
-        """Architect prompt must require ===FILE: path=== output format."""
+    def test_prompt_requires_tool_use(self):
+        """Architect prompt must require write_file tool use."""
         sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="")
-        assert "===FILE:" in sample
+        assert "write_file" in sample
 
 
 # ---------------------------------------------------------------------------
