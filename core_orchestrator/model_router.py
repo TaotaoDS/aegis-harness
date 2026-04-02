@@ -10,7 +10,7 @@ via base_url_env, and allows per-model temperature configuration.
 
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union
 
 import yaml
 from dotenv import load_dotenv
@@ -27,7 +27,7 @@ class ConfigError(Exception):
 class ModelRouter:
     """Load YAML config, resolve routes, dispatch through LLM connectors."""
 
-    def __init__(self, config_path: str | Path, env_path: Optional[str | Path] = None):
+    def __init__(self, config_path: Union[str, Path], env_path: Optional[Union[str, Path]] = None):
         # Load .env if provided (or auto-discover)
         load_dotenv(dotenv_path=env_path or None)
 

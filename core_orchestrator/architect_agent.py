@@ -2,27 +2,211 @@
 
 The Architect has two core capabilities:
 1. write_file / read_file — physical file operations on the workspace
-2. _parse_file_blocks() — extracts ===FILE: path=== blocks from LLM output
+2. parse_file_blocks() — multi-strategy extraction of code files from LLM output
 
 Unlike the CEO (stateful orchestrator), the Architect is a stateless
 task executor — each solve_task() call is independent.
 """
 
+import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .llm_gateway import LLMGateway
 from .workspace_manager import WorkspaceManager
 
 
 # ---------------------------------------------------------------------------
-# File-block protocol: LLM outputs code wrapped in ===FILE: path=== markers
+# Multi-strategy file-block extraction
+# ---------------------------------------------------------------------------
+#
+# LLMs don't always follow the ===FILE: path=== protocol strictly.
+# We attempt multiple strategies in priority order:
+#
+#   Strategy 1 (primary):   ===FILE: path=== ... ===END===
+#   Strategy 2 (fallback):  Markdown code blocks with filename annotations
+#                           (HTML comments, inline comments, info-string labels)
+#   Strategy 3 (fallback):  Heading or bold label immediately before a code block
+#
+# The first strategy that yields >=1 file wins.
 # ---------------------------------------------------------------------------
 
+# --- Strategy 1: ===FILE: path=== protocol ---
+
 _FILE_BLOCK_RE = re.compile(
-    r"===FILE:\s*(.+?)\s*===\s*\n(.*?)(?=\n===(?:FILE:|END===)|$)",
+    r"={2,4}\s*FILE:\s*(.+?)\s*={2,4}\s*\n(.*?)(?=\n={2,4}\s*(?:FILE:|END)\s*={0,4}|$)",
     re.DOTALL,
 )
+
+# --- Strategy 2: Markdown fenced code blocks with filename annotations ---
+#
+# Matches triple-backtick blocks.  Returns (info_string, body).
+# Pre-context is looked up separately using match.start() position.
+_FENCED_BLOCK_RE = re.compile(
+    r"```(\w*(?:[^\S\n][^\n]*)?)\n"    # opening fence with optional info string
+    r"(.*?)"                           # body
+    r"\n```",                          # closing fence
+    re.DOTALL,
+)
+
+# Filename patterns inside info strings:  ```html title="index.html"
+_INFO_TITLE_RE = re.compile(r'title\s*=\s*["\']([^"\']+)["\']')
+# ```html (index.html)  or  ```html index.html
+_INFO_PAREN_RE = re.compile(r'\(\s*([^)]+\.\w+)\s*\)')
+_INFO_BARE_PATH_RE = re.compile(r'(\S+\.\w{1,10})$')
+
+# Filename patterns as first line of code body:
+#   <!-- filename: path -->   or   // filename: path   or   # filename: path
+_BODY_COMMENT_RE = re.compile(
+    r'^\s*(?:<!-{1,2}\s*filename:\s*(.+?)\s*-{1,2}>|'
+    r'//\s*filename:\s*(.+?)$|'
+    r'#\s*filename:\s*(.+?)$)',
+    re.MULTILINE,
+)
+
+# --- Strategy 3: Label immediately before a code block ---
+#
+# **`index.html`**:   or   `index.html`:   or   ### index.html
+_LABEL_RE = re.compile(
+    r'(?:\*{1,2}`([^`]+\.\w{1,10})`\*{0,2}\s*:?'  # **`path`**: or *`path`*:
+    r'|`([^`]+\.\w{1,10})`\s*:'                     # `path`:
+    r'|#{1,6}\s+(\S+\.\w{1,10}))'                   # ### path
+)
+
+# File extensions we consider valid code deliverables
+_CODE_EXTENSIONS = {
+    ".html", ".htm", ".css", ".js", ".ts", ".jsx", ".tsx",
+    ".py", ".rb", ".go", ".rs", ".java", ".c", ".cpp", ".h",
+    ".json", ".yaml", ".yml", ".toml", ".xml", ".svg",
+    ".sh", ".bash", ".sql", ".md", ".txt", ".cfg", ".ini",
+    ".vue", ".svelte", ".php", ".swift", ".kt", ".scala",
+}
+
+
+def _looks_like_filepath(s: str) -> bool:
+    """Check if a string looks like a file path (has a known extension)."""
+    _, ext = os.path.splitext(s.strip().strip("`'\""))
+    return ext.lower() in _CODE_EXTENSIONS
+
+
+def _clean_path(raw: str) -> str:
+    """Normalize a raw file path: strip whitespace, quotes, backticks."""
+    return raw.strip().strip("`'\"").strip()
+
+
+def _extract_filename_from_comment(body: str) -> Optional[str]:
+    """Extract filename from a comment on the first line of a code block body."""
+    m = _BODY_COMMENT_RE.search(body[:200])  # only check first 200 chars
+    if m:
+        path = m.group(1) or m.group(2) or m.group(3)
+        if path:
+            return _clean_path(path)
+    return None
+
+
+def _strip_filename_comment(body: str) -> str:
+    """Remove the filename comment from the first line if present."""
+    lines = body.split("\n", 1)
+    if lines and _BODY_COMMENT_RE.match(lines[0]):
+        return lines[1] if len(lines) > 1 else ""
+    return body
+
+
+def _strategy_file_blocks(text: str) -> Dict[str, str]:
+    """Strategy 1: ===FILE: path=== protocol (primary)."""
+    matches = _FILE_BLOCK_RE.findall(text)
+    result: Dict[str, str] = {}
+    for path, content in matches:
+        clean = _clean_path(path)
+        if clean:
+            result[clean] = content.rstrip()
+    return result
+
+
+def _get_pre_context(text: str, pos: int, lines: int = 2) -> str:
+    """Extract up to `lines` lines of text immediately before position `pos`."""
+    before = text[:pos]
+    parts = before.rsplit("\n", lines + 1)
+    # parts[-lines:] gives the last `lines` segments (lines before pos)
+    return "\n".join(parts[-(lines):]) if len(parts) > 1 else before
+
+
+def _strategy_markdown_blocks(text: str) -> Dict[str, str]:
+    """Strategy 2+3: Markdown fenced code blocks with filename annotations."""
+    result: Dict[str, str] = {}
+
+    for match in _FENCED_BLOCK_RE.finditer(text):
+        info_string = match.group(1).strip()
+        body = match.group(2)
+
+        if not body.strip():
+            continue
+
+        filename: Optional[str] = None
+
+        # 2a: Check info string for title="path"
+        m = _INFO_TITLE_RE.search(info_string)
+        if m and _looks_like_filepath(m.group(1)):
+            filename = _clean_path(m.group(1))
+
+        # 2b: Check info string for (path) or bare path
+        if not filename:
+            m = _INFO_PAREN_RE.search(info_string)
+            if m and _looks_like_filepath(m.group(1)):
+                filename = _clean_path(m.group(1))
+
+        if not filename:
+            # Split info_string: first word is language, rest might be path
+            parts = info_string.split(None, 1)
+            if len(parts) == 2 and _looks_like_filepath(parts[1]):
+                filename = _clean_path(parts[1])
+
+        # 2c: Check first line of body for filename comment
+        if not filename:
+            filename = _extract_filename_from_comment(body)
+            if filename:
+                body = _strip_filename_comment(body)
+
+        # 3: Check pre-context for label
+        if not filename:
+            pre_context = _get_pre_context(text, match.start())
+            if pre_context.strip():
+                m = _LABEL_RE.search(pre_context)
+                if m:
+                    path = m.group(1) or m.group(2) or m.group(3)
+                    if path and _looks_like_filepath(path):
+                        filename = _clean_path(path)
+
+        if filename and body.strip():
+            result[filename] = body.rstrip()
+
+    return result
+
+
+def parse_file_blocks(text: str) -> Dict[str, str]:
+    """Extract {filepath: content} from LLM output using multi-strategy parsing.
+
+    Strategies tried in order (first to yield >=1 file wins):
+    1. ===FILE: path=== delimited blocks (primary protocol)
+    2. Markdown fenced code blocks with filename annotations
+       (info-string titles, HTML/inline comments, heading/label context)
+
+    Returns an empty dict if no files can be extracted.
+    """
+    if not text or not text.strip():
+        return {}
+
+    # Strategy 1: ===FILE: path=== protocol
+    result = _strategy_file_blocks(text)
+    if result:
+        return result
+
+    # Strategy 2+3: Markdown code blocks with filename annotations
+    result = _strategy_markdown_blocks(text)
+    if result:
+        return result
+
+    return {}
 
 _SOLVE_SYSTEM = """\
 You are a senior software architect who writes production code.
@@ -65,21 +249,6 @@ reasoning quality.
 """
 
 
-def parse_file_blocks(text: str) -> Dict[str, str]:
-    """Extract {filepath: content} from ===FILE: path=== delimited blocks.
-
-    Returns an empty dict if no file blocks are found.
-    """
-    matches = _FILE_BLOCK_RE.findall(text)
-    result: Dict[str, str] = {}
-    for path, content in matches:
-        clean_path = path.strip().strip("`'\"")
-        clean_content = content.rstrip()
-        if clean_path:
-            result[clean_path] = clean_content
-    return result
-
-
 class ArchitectAgent:
     """Reads task files, generates solutions, writes code to workspace."""
 
@@ -89,16 +258,19 @@ class ArchitectAgent:
         workspace: WorkspaceManager,
         workspace_id: str,
         knowledge_context: str = "",
+        bus=None,
     ):
+        from .event_bus import NullBus
         self._gateway = gateway
         self._workspace = workspace
         self._ws_id = workspace_id
         self._knowledge_context = knowledge_context
+        self._bus = bus or NullBus()
 
     # --- File tools (workspace-scoped) ---
 
     def write_file(self, path: str, content: str) -> None:
-        """Write a file to the workspace under src/."""
+        """Write a file to the workspace under deliverables/."""
         self._workspace.write(self._ws_id, path, content)
 
     def read_file(self, path: str) -> str:
@@ -164,6 +336,8 @@ class ArchitectAgent:
         task_id = self._task_id_from_filename(task_filename)
         feedback_context = feedback or self._get_feedback_context(task_id)
 
+        self._bus.emit("architect.solving", task_id=task_id)
+
         prompt = _SOLVE_SYSTEM.format(
             plan_context=plan_context,
             task_content=task_content,
@@ -173,11 +347,19 @@ class ArchitectAgent:
         result = self._gateway.send(prompt)
         solution = result["llm_response"]
 
-        # Parse and write file blocks to workspace
+        # Parse and write file blocks to workspace (multi-strategy)
         file_blocks = parse_file_blocks(solution)
+        self._bus.emit("architect.llm_response", task_id=task_id, file_count=len(file_blocks))
+        if not file_blocks and solution.strip():
+            # Diagnostic: log first 300 chars of raw response for debugging
+            self._bus.emit(
+                "architect.parse_failed",
+                task_id=task_id,
+                response_preview=solution[:300],
+            )
         written_files: List[str] = []
         for filepath, content in file_blocks.items():
-            self.write_file(f"src/{filepath}" if not filepath.startswith("src/") else filepath, content)
+            self.write_file(f"deliverables/{filepath}" if not filepath.startswith("deliverables/") else filepath, content)
             written_files.append(filepath)
 
         # Always write the artifact summary
@@ -193,6 +375,7 @@ class ArchitectAgent:
             f"## Implementation\n{solution}\n"
         )
         self._workspace.write(self._ws_id, artifact_path, artifact_content)
+        self._bus.emit("architect.files_written", task_id=task_id, files=written_files)
         return artifact_path
 
     def solve_all(self) -> List[str]:
@@ -201,7 +384,7 @@ class ArchitectAgent:
         return [self.solve_task(t) for t in tasks]
 
     def get_written_files(self, task_id: str) -> List[str]:
-        """List src/ files written for a given task by reading the artifact."""
+        """List deliverables/ files written for a given task by reading the artifact."""
         artifact = f"artifacts/{task_id}_solution.md"
         if not self._workspace.exists(self._ws_id, artifact):
             return []

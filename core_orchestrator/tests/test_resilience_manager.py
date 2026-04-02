@@ -133,7 +133,7 @@ class TestLayer1ContextReset:
 
         def counting_factory():
             gateways_created["count"] += 1
-            return LLMGateway(llm=lambda t: make_architect_response(f"attempt {gateways_created['count']}"))
+            return LLMGateway(llm=lambda t: make_file_block_response({"app.py": f"x = {gateways_created['count']}\n"}))
 
         qa_responses = [make_qa_fail(), make_qa_pass()]
         qa_gw = LLMGateway(llm=lambda t: qa_responses.pop(0))
@@ -151,7 +151,10 @@ class TestLayer1ContextReset:
 
     def test_feedback_injected_into_workspace(self, workspace):
         rm = build_manager(workspace,
-            architect_responses=[make_architect_response("v1"), make_architect_response("v2")],
+            architect_responses=[
+                make_file_block_response({"app.py": "v1 = 1\n"}),
+                make_file_block_response({"app.py": "v2 = 2\n"}),
+            ],
             qa_responses=[make_qa_fail(["Missing auth"]), make_qa_pass()],
         )
         rm.run_task_loop("task_1")
@@ -166,14 +169,14 @@ class TestLayer2ModelEscalation:
 
         def esc_factory():
             escalated_used["flag"] = True
-            return LLMGateway(llm=lambda t: make_architect_response("escalated solution"))
+            return LLMGateway(llm=lambda t: make_file_block_response({"app.py": "escalated = True\n"}))
 
         qa_responses = [make_qa_fail(), make_qa_fail(), make_qa_pass()]
         qa_gw = LLMGateway(llm=lambda t: qa_responses.pop(0))
 
         rm = ResilienceManager(
             workspace=workspace, workspace_id="proj",
-            gateway_factory=lambda: LLMGateway(llm=lambda t: make_architect_response()),
+            gateway_factory=lambda: LLMGateway(llm=lambda t: make_file_block_response({"app.py": "x = 1\n"})),
             escalated_gateway_factory=esc_factory,
             qa_gateway=qa_gw,
         )
@@ -184,9 +187,12 @@ class TestLayer2ModelEscalation:
 
     def test_escalation_level_tracked(self, workspace):
         rm = build_manager(workspace,
-            architect_responses=[make_architect_response(), make_architect_response()],
+            architect_responses=[
+                make_file_block_response({"app.py": "x = 1\n"}),
+                make_file_block_response({"app.py": "x = 2\n"}),
+            ],
             qa_responses=[make_qa_fail(), make_qa_fail(), make_qa_pass()],
-            escalated_architect_responses=[make_architect_response("advanced")],
+            escalated_architect_responses=[make_file_block_response({"app.py": "x = 3\n"})],
         )
         result = rm.run_task_loop("task_1")
         assert result["escalation_level"] == 2
@@ -244,7 +250,7 @@ class TestTokenBudget:
 
     def test_budget_tracking_in_status(self, workspace):
         rm = build_manager(workspace,
-            architect_responses=[make_architect_response()],
+            architect_responses=[make_file_block_response({"app.py": "x = 1\n"})],
             qa_responses=[make_qa_pass()],
             token_budget=100000,
         )
@@ -259,7 +265,7 @@ class TestTokenBudget:
 class TestHappyPath:
     def test_pass_on_first_try(self, workspace):
         rm = build_manager(workspace,
-            architect_responses=[make_architect_response("perfect solution")],
+            architect_responses=[make_file_block_response({"app.py": "x = 1\n"})],
             qa_responses=[make_qa_pass()],
         )
         result = rm.run_task_loop("task_1")
@@ -269,7 +275,7 @@ class TestHappyPath:
 
     def test_approved_file_created(self, workspace):
         rm = build_manager(workspace,
-            architect_responses=[make_architect_response()],
+            architect_responses=[make_file_block_response({"app.py": "x = 1\n"})],
             qa_responses=[make_qa_pass()],
         )
         rm.run_task_loop("task_1")
@@ -281,7 +287,10 @@ class TestHappyPath:
 class TestRunAll:
     def test_processes_all_tasks(self, workspace_two_tasks):
         rm = build_manager(workspace_two_tasks,
-            architect_responses=[make_architect_response(), make_architect_response()],
+            architect_responses=[
+                make_file_block_response({"app.py": "x = 1\n"}),
+                make_file_block_response({"app.py": "x = 2\n"}),
+            ],
             qa_responses=[make_qa_pass(), make_qa_pass()],
         )
         results = rm.run_all()
@@ -290,7 +299,7 @@ class TestRunAll:
 
     def test_mixed_results(self, workspace_two_tasks):
         rm = build_manager(workspace_two_tasks,
-            architect_responses=[make_architect_response()] * 4,
+            architect_responses=[make_file_block_response({"app.py": f"x = {i}\n"}) for i in range(4)],
             qa_responses=[make_qa_pass(), make_qa_fail(), make_qa_fail(), make_qa_fail()],
         )
         results = rm.run_all()
@@ -304,7 +313,7 @@ class TestRunAll:
 class TestStatus:
     def test_status_after_run(self, workspace_two_tasks):
         rm = build_manager(workspace_two_tasks,
-            architect_responses=[make_architect_response()] * 4,
+            architect_responses=[make_file_block_response({"app.py": f"x = {i}\n"}) for i in range(4)],
             qa_responses=[make_qa_pass(), make_qa_fail(), make_qa_fail(), make_qa_fail()],
         )
         rm.run_all()
@@ -357,7 +366,10 @@ class TestKnowledgeCapture:
         """When a task passes after retries, lesson is captured."""
         km = KnowledgeManager(workspace=workspace, workspace_id="proj")
         rm = build_manager(workspace,
-            architect_responses=[make_architect_response("v1"), make_architect_response("v2")],
+            architect_responses=[
+                make_file_block_response({"app.py": "v1 = 1\n"}),
+                make_file_block_response({"app.py": "v2 = 2\n"}),
+            ],
             qa_responses=[make_qa_fail(["Missing auth"]), make_qa_pass()],
             knowledge_manager=km,
         )
@@ -370,7 +382,7 @@ class TestKnowledgeCapture:
         """First-try pass doesn't generate a lesson (nothing to learn)."""
         km = KnowledgeManager(workspace=workspace, workspace_id="proj")
         rm = build_manager(workspace,
-            architect_responses=[make_architect_response()],
+            architect_responses=[make_file_block_response({"app.py": "x = 1\n"})],
             qa_responses=[make_qa_pass()],
             knowledge_manager=km,
         )
@@ -387,3 +399,45 @@ class TestKnowledgeCapture:
         )
         rm.run_task_loop("task_1")
         assert not km.has_lessons()
+
+
+# --- Zero-file detection ---
+
+class TestZeroFileDetection:
+    def test_zero_files_writes_feedback_and_retries(self, workspace):
+        """When Architect produces no ===FILE=== blocks, feedback is written
+        and the task retries instead of going to QA."""
+        rm = build_manager(workspace,
+            # All 3 attempts produce no file blocks
+            architect_responses=[make_architect_response("plain text")] * 3,
+            qa_responses=[],  # QA should never be called
+        )
+        result = rm.run_task_loop("task_1")
+        assert result["verdict"] == "escalated"
+        assert result["attempts"] == 3
+        # Feedback file should exist with zero-file message
+        assert workspace.exists("proj", "feedback/task_1_feedback.md")
+        fb = workspace.read("proj", "feedback/task_1_feedback.md")
+        assert "0 code files" in fb or "zero files" in fb.lower()
+
+    def test_zero_files_then_recovery(self, workspace):
+        """First attempt produces no files, second attempt produces files and passes."""
+        rm = build_manager(workspace,
+            architect_responses=[
+                make_architect_response("no files here"),
+                make_file_block_response({"app.py": "x = 1\n"}),
+            ],
+            qa_responses=[make_qa_pass()],
+        )
+        result = rm.run_task_loop("task_1")
+        assert result["verdict"] == "pass"
+        assert result["attempts"] == 2
+
+    def test_zero_files_escalation_level(self, workspace):
+        """Zero-file failures still escalate through levels."""
+        rm = build_manager(workspace,
+            architect_responses=[make_architect_response("empty")] * 3,
+            qa_responses=[],
+        )
+        result = rm.run_task_loop("task_1")
+        assert result["escalation_level"] == 3  # All retries exhausted

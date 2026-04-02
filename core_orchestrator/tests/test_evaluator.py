@@ -49,13 +49,13 @@ class TestEvalResult:
 
 class TestValidateFilesExist:
     def test_all_files_present(self, workspace, evaluator):
-        workspace.write("proj", "src/index.html", "<html></html>")
-        workspace.write("proj", "src/style.css", "body {}")
+        workspace.write("proj", "deliverables/index.html", "<html></html>")
+        workspace.write("proj", "deliverables/style.css", "body {}")
         result = evaluator.validate_files_exist(["index.html", "style.css"])
         assert result.success is True
 
     def test_missing_file(self, workspace, evaluator):
-        workspace.write("proj", "src/index.html", "<html></html>")
+        workspace.write("proj", "deliverables/index.html", "<html></html>")
         result = evaluator.validate_files_exist(["index.html", "missing.js"])
         assert result.success is False
         assert "missing.js" in result.stderr
@@ -69,17 +69,17 @@ class TestValidateFilesExist:
 
 class TestSyntaxCheckPython:
     def test_valid_python(self, workspace, evaluator):
-        workspace.write("proj", "src/app.py", "print('hello')\n")
-        result = evaluator.syntax_check_python("src/app.py")
+        workspace.write("proj", "deliverables/app.py", "print('hello')\n")
+        result = evaluator.syntax_check_python("deliverables/app.py")
         assert result.success is True
 
     def test_invalid_python(self, workspace, evaluator):
-        workspace.write("proj", "src/bad.py", "def foo(\n")
-        result = evaluator.syntax_check_python("src/bad.py")
+        workspace.write("proj", "deliverables/bad.py", "def foo(\n")
+        result = evaluator.syntax_check_python("deliverables/bad.py")
         assert result.success is False
 
     def test_missing_file(self, evaluator):
-        result = evaluator.syntax_check_python("src/nope.py")
+        result = evaluator.syntax_check_python("deliverables/nope.py")
         assert result.success is False
         assert "not found" in result.stderr
 
@@ -89,18 +89,18 @@ class TestSyntaxCheckPython:
 class TestValidateHtml:
     def test_valid_html(self, workspace, evaluator):
         html = "<!DOCTYPE html><html><head><title>T</title></head><body></body></html>"
-        workspace.write("proj", "src/index.html", html)
-        result = evaluator.validate_html("src/index.html")
+        workspace.write("proj", "deliverables/index.html", html)
+        result = evaluator.validate_html("deliverables/index.html")
         assert result.success is True
 
     def test_missing_doctype(self, workspace, evaluator):
-        workspace.write("proj", "src/bad.html", "<html><body></body></html>")
-        result = evaluator.validate_html("src/bad.html")
+        workspace.write("proj", "deliverables/bad.html", "<html><body></body></html>")
+        result = evaluator.validate_html("deliverables/bad.html")
         assert result.success is False
         assert "DOCTYPE" in result.stderr
 
     def test_missing_file(self, evaluator):
-        result = evaluator.validate_html("src/nope.html")
+        result = evaluator.validate_html("deliverables/nope.html")
         assert result.success is False
 
 
@@ -108,10 +108,10 @@ class TestValidateHtml:
 
 class TestRunEval:
     def test_all_valid(self, workspace, evaluator):
-        workspace.write("proj", "src/app.py", "x = 1\n")
+        workspace.write("proj", "deliverables/app.py", "x = 1\n")
         html = "<!DOCTYPE html><html><head></head><body></body></html>"
-        workspace.write("proj", "src/index.html", html)
-        workspace.write("proj", "src/style.css", "body {}")
+        workspace.write("proj", "deliverables/index.html", html)
+        workspace.write("proj", "deliverables/style.css", "body {}")
         result = evaluator.run_eval(["app.py", "index.html", "style.css"])
         assert result.success is True
 
@@ -120,7 +120,7 @@ class TestRunEval:
         assert result.success is False
 
     def test_syntax_error_fails(self, workspace, evaluator):
-        workspace.write("proj", "src/bad.py", "def (:\n")
+        workspace.write("proj", "deliverables/bad.py", "def (:\n")
         result = evaluator.run_eval(["bad.py"])
         assert result.success is False
 
@@ -133,17 +133,17 @@ class TestRunEval:
 
 class TestRunPython:
     def test_successful_script(self, workspace, evaluator):
-        workspace.write("proj", "src/hello.py", "print('hello world')\n")
-        result = evaluator.run_python("src/hello.py")
+        workspace.write("proj", "deliverables/hello.py", "print('hello world')\n")
+        result = evaluator.run_python("deliverables/hello.py")
         assert result.success is True
         assert "hello world" in result.stdout
 
     def test_failing_script(self, workspace, evaluator):
-        workspace.write("proj", "src/fail.py", "raise ValueError('boom')\n")
-        result = evaluator.run_python("src/fail.py")
+        workspace.write("proj", "deliverables/fail.py", "raise ValueError('boom')\n")
+        result = evaluator.run_python("deliverables/fail.py")
         assert result.success is False
         assert "boom" in result.stderr
 
     def test_missing_script(self, evaluator):
-        result = evaluator.run_python("src/nope.py")
+        result = evaluator.run_python("deliverables/nope.py")
         assert result.success is False

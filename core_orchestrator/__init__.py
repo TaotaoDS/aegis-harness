@@ -25,3 +25,4 @@ from .knowledge_manager import KnowledgeManager
 from .qa_agent import QAAgent, QAError
 from .resilience_manager import ResilienceManager
 from .ce_orchestrator import CEOrchestrator
+from .event_bus import EventBus, NullBus, ListBus, bus_from_workspace

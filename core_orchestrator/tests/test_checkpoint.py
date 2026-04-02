@@ -35,6 +35,7 @@ CEO_RESPONSES = [
 ]
 
 PASS_QA = json.dumps({"verdict": "pass", "issues": [], "notes": "ok"})
+FILE_BLOCK_RESPONSE = "===FILE: app.py===\nprint('hello')\n===END==="
 
 CE_RESPONSES = [
     json.dumps({"problem_type": "design", "components": ["api"], "severity": "low"}),
@@ -122,13 +123,13 @@ class TestResumeFromDelegated:
         save_checkpoint(ceo._workspace, "default", stage="delegated", requirement="Build API")
 
         # Phase 2: Resume from delegated — run execution directly
-        ws = WorkspaceManager(tmp_path)
+        ws = WorkspaceManager(tmp_path, isolated=True)
         cp = load_checkpoint(ws, "default")
         assert cp["stage"] == "delegated"
 
         def exec_llm(text):
             if "## Task" in text:
-                return "FastAPI solution"
+                return FILE_BLOCK_RESPONSE
             return PASS_QA
 
         status = run_execution(workspace=ws, workspace_id="default", llm=exec_llm)
@@ -150,7 +151,7 @@ class TestResumeFromExecuted:
 
         def exec_llm(text):
             if "## Task" in text:
-                return "solution"
+                return FILE_BLOCK_RESPONSE
             return PASS_QA
 
         ws = ceo._workspace
@@ -211,7 +212,7 @@ class TestFullPipelineWithCheckpoints:
 
         def exec_llm(text):
             if "## Task" in text:
-                return "solution"
+                return FILE_BLOCK_RESPONSE
             return PASS_QA
 
         status = run_execution(workspace=ws, workspace_id="default", llm=exec_llm)

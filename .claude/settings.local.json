@@ -38,7 +38,11 @@
       "Bash(python -m pytest core_orchestrator/tests/test_checkpoint.py -v --tb=short)",
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(find /Users/tao/enterprise-harness -type f -name \"*.py\" -path \"*/test*\" -exec wc -l {} +)",
+      "Bash(find /Users/tao/enterprise-harness/workspaces/snake_game_v3 -type f -exec wc -l {} +)",
+      "Bash(python -m pytest core_orchestrator/tests/test_evaluator.py core_orchestrator/tests/test_resilience_manager.py core_orchestrator/tests/test_translation_gateway.py -q --tb=short)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

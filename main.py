@@ -31,6 +31,7 @@ from core_orchestrator.ceo_agent import CEOAgent
 from core_orchestrator.resilience_manager import ResilienceManager
 from core_orchestrator.ce_orchestrator import CEOrchestrator
 from core_orchestrator.knowledge_manager import KnowledgeManager
+from core_orchestrator.event_bus import EventBus, NullBus, bus_from_workspace
 
 
 WORKSPACE_ROOT = Path(__file__).parent / "workspaces"
@@ -97,7 +98,7 @@ def build_pipeline(
 ) -> CEOAgent:
     """Assemble the orchestration pipeline and return a ready CEOAgent."""
     root = workspace_root or WORKSPACE_ROOT
-    ws = WorkspaceManager(root)
+    ws = WorkspaceManager(root, isolated=True)
 
     if not ws.exists(workspace_id):
         ws.create(workspace_id)
@@ -153,6 +154,7 @@ def run_execution(
     workspace_id: str,
     llm: Optional[Callable[[str], str]] = None,
     escalated_llm: Optional[Callable[[str], str]] = None,
+    bus=None,
 ) -> Dict:
     """Run Architect + Evaluator + QA on all delegated tasks via ResilienceManager.
 
@@ -189,6 +191,7 @@ def run_execution(
         eval_timeout=exec_cfg.get("eval_timeout", 30),
         knowledge_manager=km,
         knowledge_context=knowledge_ctx,
+        bus=bus,
     )
 
     print("\n[Execution] Running Architect + Evaluator + QA pipeline...")
@@ -304,9 +307,13 @@ def main() -> None:
 
     # Bootstrap workspace
     root = WORKSPACE_ROOT
-    ws = WorkspaceManager(root)
+    ws = WorkspaceManager(root, isolated=True)
     if not ws.exists(ws_id):
         ws.create(ws_id)
+
+    # Create event bus for real-time observability
+    bus = bus_from_workspace(ws, ws_id)
+    bus.emit("pipeline.start", workspace=ws_id)
 
     # Load or reset checkpoint
     checkpoint = None
@@ -378,7 +385,7 @@ def main() -> None:
     # Phase 2: Architect + QA via ResilienceManager
     # ------------------------------------------------------------------
     if not _stage_done(checkpoint, "executed"):
-        status = run_execution(workspace=ws, workspace_id=ws_id)
+        status = run_execution(workspace=ws, workspace_id=ws_id, bus=bus)
         save_checkpoint(ws, ws_id, stage="executed",
                         requirement=requirement, execution_status=status)
         print("[Checkpoint] Saved: executed\n")
@@ -401,6 +408,7 @@ def main() -> None:
     # Summary
     # ------------------------------------------------------------------
     _print_summary(status, ws_id)
+    bus.emit("pipeline.complete", workspace=ws_id)
 
 
 if __name__ == "__main__":

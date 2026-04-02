@@ -2,6 +2,112 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] — 2026-04-02
+
+### Bug Fixes
+
+- **Multi-strategy file parser for `parse_file_blocks()`** (`architect_agent.py`):
+  Fixed ZERO_FILES failures caused by LLM returning standard Markdown code blocks
+  instead of the `===FILE: path===` protocol. New 3-tier fallback chain:
+  1. `===FILE: path===` protocol (primary, now tolerates 2-4 equals signs)
+  2. Markdown fenced code blocks with filename annotations:
+     `title="path"`, `(path)`, bare path in info string, or
+     `<!-- filename: path -->` / `// filename: path` / `# filename: path` comment
+  3. Pre-context label detection: `**\`path\`**:`, `` `path`: ``, `### path`
+
+  Helper functions added: `_looks_like_filepath()`, `_clean_path()`,
+  `_extract_filename_from_comment()`, `_strip_filename_comment()`,
+  `_get_pre_context()`, `_strategy_file_blocks()`, `_strategy_markdown_blocks()`.
+
+- **Duplicate `parse_file_blocks` definition removed**: The old single-strategy
+  definition (lines 245-257) was silently overwriting the new multi-strategy
+  version, causing all Markdown fallback paths to be unreachable at runtime
+  despite passing direct Python execution tests.
+
+- **Fenced block regex pre-context fix**: Removed greedy `((?:.*\n){0,2})`
+  capture group from `_FENCED_BLOCK_RE` that consumed content across multiple
+  code blocks. Pre-context is now extracted via `_get_pre_context()` using
+  `match.start()` position, correctly handling multi-block responses.
+
+- **Diagnostic event on parse failure**: When Architect returns non-empty
+  content but no files are extracted, emits `architect.parse_failed` event
+  with first 200 chars of response for observability debugging.
+
+### Tests
+
+- 400 tests total (+14 new): TestMarkdownFallback class covers all annotation
+  strategies — HTML/JS/Python filename comments, info string title/paren/bare
+  path, bold-backtick/backtick-colon/heading labels, multi-block extraction,
+  mixed strategies, priority ordering, and edge cases.
+
+## [0.5.0] — 2026-04-02
+
+### Major Features
+
+- **Real-time observability event bus** (`event_bus.py`):
+  New `EventBus` module provides publish-subscribe observability for the
+  entire Architect → Evaluator → QA pipeline. Two output backends:
+  - **Terminal renderer**: ANSI-colored event stream on stderr with
+    agent-aware color mapping (cyan=Architect, yellow=Evaluator,
+    blue=QA, magenta=Resilience, red=errors, green=success).
+  - **Audit file logger**: append-only `_workspace/execution.log` for
+    `tail -f` monitoring from a separate terminal.
+
+  22 emit points across 4 agents (ArchitectAgent, Evaluator, QAAgent,
+  ResilienceManager) covering: task solving, file writing, sandbox
+  verification, QA review, retry escalation, budget checks, and
+  pipeline lifecycle.
+
+  Zero blast radius: all agents accept `bus=None` (defaults to `NullBus`),
+  existing tests unchanged. `ListBus` test double provided for event
+  assertions.
+
+### Infrastructure
+
+- `main.py` wires the bus via `bus_from_workspace()` factory and passes
+  it through `run_execution()` → `ResilienceManager` → sub-agents.
+- TTY detection gates ANSI codes; non-TTY streams get plain text.
+
+### Tests
+
+- 384 tests total (+42 new): test_event_bus covers color mapping,
+  terminal rendering, file logging, NullBus/ListBus, factory, and
+  agent integration (Architect/Evaluator/QA emit verification).
+
+## [0.4.0] — 2026-04-02
+
+### Major Features
+
+- **Workspace directory isolation** (`workspace_manager.py`):
+  New `isolated=True` mode transparently routes runtime state files (tasks/,
+  artifacts/, feedback/, escalations/, plan.md, etc.) to `_workspace/` subdirectory,
+  while keeping deliverables in `deliverables/`. Zero changes required to agent code —
+  routing is transparent via `_route_path()` / `_unroute_path()`.
+  `list_files()` strips the `_workspace/` prefix so agents see the same logical paths.
+
+- **Deliverables path migration** (`architect_agent.py`, `evaluator.py`):
+  Architect now writes code files to `deliverables/` instead of `src/`.
+  Evaluator validates files under `deliverables/` prefix. Clean physical
+  separation between runtime state and final code output.
+
+### Bug Fixes
+
+- **Zero-file guard in ResilienceManager** (`resilience_manager.py`):
+  When Architect produces no `===FILE: path===` blocks (empty LLM output),
+  the system now immediately writes feedback "Architect produced 0 code files"
+  and retries, instead of sending an empty artifact to QA. This prevents the
+  wasteful 3× QA rejection cycle seen in snake_game_v4 task_2/task_5 failures.
+
+- **Python 3.9 compatibility** (`model_router.py`):
+  Fixed `str | Path` union syntax (PEP 604) that fails on Python 3.9.
+  Changed to `Union[str, Path]` from `typing`.
+
+### Tests
+
+- 342 tests total (+15 new): 13 isolated-mode workspace tests, 3 zero-file
+  detection tests. All existing tests updated for `src/` → `deliverables/`
+  migration and zero-file guard behavior.
+
 ## [0.3.0] — 2026-04-02
 
 ### Major Features

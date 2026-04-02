@@ -52,11 +52,14 @@ class QAAgent:
         gateway: LLMGateway,
         workspace: WorkspaceManager,
         workspace_id: str,
+        bus=None,
     ):
+        from .event_bus import NullBus
         self._gateway = gateway
         self._workspace = workspace
         self._ws_id = workspace_id
         self._results: List[Dict] = []
+        self._bus = bus or NullBus()
 
     def _require_file(self, filename: str, label: str) -> str:
         """Read a file or raise QAError with a clear message."""
@@ -76,6 +79,7 @@ class QAAgent:
             task_content=task_content,
             solution_content=solution_content,
         )
+        self._bus.emit("qa.reviewing", task_id=task_id)
         response = self._gateway.send(prompt)
         review = parse_llm_json(
             response["llm_response"],
@@ -87,10 +91,12 @@ class QAAgent:
         if verdict == "pass":
             path = f"approved/{task_id}_solution.md"
             self._workspace.write(self._ws_id, path, solution_content)
+            self._bus.emit("qa.approved", task_id=task_id, path=path)
         else:
             path = f"feedback/{task_id}_feedback.md"
             feedback = self._format_feedback(task_id, review)
             self._workspace.write(self._ws_id, path, feedback)
+            self._bus.emit("qa.rejected", task_id=task_id, issues=review.get("issues", []))
 
         result = {"task_id": task_id, "verdict": verdict, "path": path}
         self._results.append(result)

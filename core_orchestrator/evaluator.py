@@ -78,10 +78,13 @@ class Evaluator:
         workspace: WorkspaceManager,
         workspace_id: str,
         timeout: int = _DEFAULT_TIMEOUT,
+        bus=None,
     ):
+        from .event_bus import NullBus
         self._workspace = workspace
         self._ws_id = workspace_id
         self._timeout = timeout
+        self._bus = bus or NullBus()
 
     @property
     def workspace_root(self) -> Path:
@@ -127,7 +130,7 @@ class Evaluator:
         """Check that all expected files were actually written."""
         missing = []
         for f in expected_files:
-            path = f if f.startswith("src/") else f"src/{f}"
+            path = f if f.startswith("deliverables/") else f"deliverables/{f}"
             if not self._workspace.exists(self._ws_id, path):
                 missing.append(path)
 
@@ -201,6 +204,8 @@ class Evaluator:
 
         Returns the first failure, or a success result if all pass.
         """
+        self._bus.emit("evaluator.start", file_count=len(src_files))
+
         # Step 1: all files must exist
         existence = self.validate_files_exist(src_files)
         if not existence.success:
@@ -209,7 +214,7 @@ class Evaluator:
         # Step 2: per-file syntax checks
         all_stdout = [existence.stdout]
         for f in src_files:
-            src_path = f"src/{f}" if not f.startswith("src/") else f
+            src_path = f"deliverables/{f}" if not f.startswith("deliverables/") else f
             full = self.workspace_root / src_path
 
             if not full.exists():
@@ -226,9 +231,11 @@ class Evaluator:
                 result = EvalResult(success=True, stdout=f"File exists: {f}")
 
             if not result.success:
+                self._bus.emit("evaluator.file_fail", file=f, error=result.stderr[:150])
                 return result
             all_stdout.append(result.stdout)
 
+        self._bus.emit("evaluator.all_pass", file_count=len(src_files))
         return EvalResult(
             success=True,
             stdout="\n".join(s for s in all_stdout if s),

@@ -27,6 +27,9 @@ def _make_sequenced_llm(responses):
     return mock_llm
 
 
+FILE_BLOCK_RESPONSE = "===FILE: app.py===\nprint('hello')\n===END==="
+
+
 # CEO phase responses (interview done immediately + 2 tasks)
 CEO_RESPONSES = [
     json.dumps({"question": "", "done": True}),
@@ -109,7 +112,7 @@ class TestRunInterviewLoop:
         ceo = build_pipeline(workspace_root=tmp_path, llm=_make_sequenced_llm(responses))
         run_interview_loop(ceo, "Build an API")
 
-        ws = WorkspaceManager(tmp_path)
+        ws = WorkspaceManager(tmp_path, isolated=True)
         plan = ws.read("default", "plan.md")
         assert "Design API" in plan
 
@@ -145,7 +148,7 @@ class TestDelegate:
         run_interview_loop(ceo, "Build something")
         files = ceo.delegate()
 
-        ws = WorkspaceManager(tmp_path)
+        ws = WorkspaceManager(tmp_path, isolated=True)
         assert ws.exists("default", "tasks/task_1.md")
         assert ws.exists("default", "tasks/task_2.md")
 
@@ -161,17 +164,17 @@ class TestRunExecution:
         ceo = build_pipeline(workspace_root=tmp_path, llm=_make_sequenced_llm(list(CEO_RESPONSES)))
         run_interview_loop(ceo, "Build something")
         ceo.delegate()
-        return WorkspaceManager(tmp_path)
+        return WorkspaceManager(tmp_path, isolated=True)
 
     def test_run_execution_creates_artifacts(self, tmp_path):
         from main import run_execution
 
         ws = self._setup_workspace_with_tasks(tmp_path)
 
-        # Architect returns solutions, QA passes on first try
+        # Architect returns file blocks, QA passes on first try
         def exec_llm(text):
             if "architect" in text.lower() or "## Task" in text:
-                return "## Implementation\nUse FastAPI with Pydantic."
+                return FILE_BLOCK_RESPONSE
             return json.dumps({"verdict": "pass", "issues": [], "notes": "LGTM"})
 
         run_execution(
@@ -190,7 +193,7 @@ class TestRunExecution:
 
         def exec_llm(text):
             if "## Task" in text:
-                return "Solution here"
+                return FILE_BLOCK_RESPONSE
             return json.dumps({"verdict": "pass", "issues": [], "notes": "ok"})
 
         status = run_execution(
@@ -207,10 +210,10 @@ class TestRunExecution:
 
         ws = self._setup_workspace_with_tasks(tmp_path)
 
-        # QA always fails
+        # Architect returns file blocks but QA always fails
         def failing_llm(text):
             if "## Task" in text:
-                return "bad solution"
+                return FILE_BLOCK_RESPONSE
             return json.dumps({
                 "verdict": "fail",
                 "issues": ["Incomplete implementation"],
@@ -233,7 +236,7 @@ class TestRunExecution:
 
         def failing_llm(text):
             if "## Task" in text:
-                return "bad"
+                return FILE_BLOCK_RESPONSE
             return json.dumps({"verdict": "fail", "issues": ["bug"], "notes": "no"})
 
         run_execution(workspace=ws, workspace_id="default", llm=failing_llm)
@@ -255,11 +258,11 @@ class TestRunPostmortem:
         run_interview_loop(ceo, "Build something")
         ceo.delegate()
 
-        ws = WorkspaceManager(tmp_path)
+        ws = WorkspaceManager(tmp_path, isolated=True)
 
         def exec_llm(text):
             if "## Task" in text:
-                return "Use FastAPI with Pydantic."
+                return FILE_BLOCK_RESPONSE
             return json.dumps({"verdict": "pass", "issues": [], "notes": "LGTM"})
 
         run_execution(workspace=ws, workspace_id="default", llm=exec_llm)
@@ -327,12 +330,12 @@ class TestFullPipeline:
         run_interview_loop(ceo, "Build an API")
         ceo.delegate()
 
-        ws = WorkspaceManager(tmp_path)
+        ws = WorkspaceManager(tmp_path, isolated=True)
 
         # Phase 2: Architect + QA (pass on first try)
         def exec_llm(text):
             if "## Task" in text:
-                return "Implementation with FastAPI."
+                return FILE_BLOCK_RESPONSE
             return json.dumps({"verdict": "pass", "issues": [], "notes": "ok"})
 
         status = run_execution(workspace=ws, workspace_id="default", llm=exec_llm)
