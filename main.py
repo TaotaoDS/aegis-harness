@@ -307,6 +307,94 @@ def _make_tool_llm_from_text_llm(text_llm: Callable[[str], str]):
     return _tool_llm
 
 
+def run_update_mode(
+    *,
+    workspace: WorkspaceManager,
+    workspace_id: str,
+    requirement: str,
+    llm: Optional[Callable[[str], str]] = None,
+    tool_llm=None,
+    bus=None,
+) -> Dict:
+    """Run Update Mode: generate incremental tasks and execute them.
+
+    1. CEO reads existing deliverables and generates update tasks
+    2. Delegate writes new task files (append-only)
+    3. ResilienceManager runs Architect on new tasks only
+
+    Returns the ResilienceManager.status() dict.
+    """
+    sanitizer = default_pipeline()
+    _llm = llm or _load_default_llm()
+
+    # Phase 1: CEO plans update
+    gateway = LLMGateway(sanitizer=sanitizer, llm=_llm)
+    ceo = CEOAgent(gateway=gateway, workspace=workspace, workspace_id=workspace_id)
+
+    print(f"\n[Update] Analyzing existing codebase and planning changes...")
+    plan = ceo.plan_update(requirement)
+
+    tasks = plan.get("tasks", [])
+    if not tasks:
+        print("[Update] CEO generated 0 tasks. Nothing to do.")
+        return {"completed": [], "escalated": [], "token_usage": 0}
+
+    print(f"[Update] Generated {len(tasks)} update task(s):")
+    for t in tasks:
+        files = t.get("files_to_modify", [])
+        files_str = f" (files: {', '.join(files)})" if files else ""
+        print(f"  - [{t['priority']}] {t['id']}: {t['title']}{files_str}")
+
+    # Phase 2: Delegate (append-only)
+    delegated_files = ceo.delegate()
+    print(f"[Update] Delegated {len(delegated_files)} task file(s).")
+
+    # Phase 3: Execute only the new tasks
+    _tool_llm = tool_llm or _make_tool_llm_from_text_llm(_llm)
+    exec_cfg = _load_execution_config()
+    qa_gateway = LLMGateway(sanitizer=sanitizer, llm=_llm)
+
+    km = KnowledgeManager(workspace=workspace, workspace_id=workspace_id)
+    knowledge_ctx = km.load_knowledge()
+
+    rm = ResilienceManager(
+        workspace=workspace,
+        workspace_id=workspace_id,
+        tool_llm=_tool_llm,
+        qa_gateway=qa_gateway,
+        max_retries=exec_cfg.get("max_retries", 3),
+        token_budget=exec_cfg.get("token_budget", 100_000),
+        token_threshold=exec_cfg.get("token_threshold", 0.8),
+        eval_timeout=exec_cfg.get("eval_timeout", 30),
+        knowledge_manager=km,
+        knowledge_context=knowledge_ctx,
+        bus=bus,
+    )
+
+    # Only run the newly generated tasks (not all tasks)
+    new_task_ids = [t["id"] for t in tasks]
+    if bus:
+        bus.emit("pipeline.update_start", task_count=len(new_task_ids))
+
+    print(f"\n[Execution] Running Architect + Evaluator + QA on {len(new_task_ids)} update task(s)...")
+    results = [rm.run_task_loop(tid) for tid in new_task_ids]
+
+    for r in results:
+        tag = "PASS" if r["verdict"] == "pass" else "ESCALATED"
+        print(f"  [{tag}] {r['task_id']} (attempts: {r['attempts']}) -> {r['path']}")
+
+    status = rm.status()
+    passed = len(status["completed"])
+    escalated = len(status["escalated"])
+    print(f"[Update] Done: {passed} passed, {escalated} escalated, "
+          f"tokens used: {status['token_usage']}")
+
+    if bus:
+        bus.emit("pipeline.update_complete", passed=passed, escalated=escalated)
+
+    return status
+
+
 def _print_summary(status: Dict, ws_id: str) -> None:
     print("\n" + "=" * 60)
     print("  Pipeline Complete")
@@ -338,6 +426,13 @@ def main() -> None:
         action="store_true",
         help="Discard checkpoint and start fresh",
     )
+    parser.add_argument(
+        "--update", "-u",
+        type=str,
+        default=None,
+        metavar="DESCRIPTION",
+        help="Update Mode: provide a change/fix description to modify existing deliverables",
+    )
     args = parser.parse_args()
 
     ws_id = args.workspace
@@ -356,6 +451,21 @@ def main() -> None:
     # Create event bus for real-time observability
     bus = bus_from_workspace(ws, ws_id)
     bus.emit("pipeline.start", workspace=ws_id)
+
+    # ------------------------------------------------------------------
+    # Update Mode — short-circuit the normal pipeline
+    # ------------------------------------------------------------------
+    if args.update:
+        print(f"[Update Mode] Requirement: {args.update}\n")
+        status = run_update_mode(
+            workspace=ws,
+            workspace_id=ws_id,
+            requirement=args.update,
+            bus=bus,
+        )
+        _print_summary(status, ws_id)
+        bus.emit("pipeline.complete", workspace=ws_id)
+        return
 
     # Load or reset checkpoint
     checkpoint = None

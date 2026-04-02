@@ -274,7 +274,7 @@ class TestAgentIntegration:
         from core_orchestrator.llm_connector import ToolCall
 
         bus = ListBus()
-        tool_llm = lambda s, p, t: [
+        tool_llm = lambda s, p, t, h=None: [
             ToolCall(name="write_file", arguments={"filepath": "app.py", "content": "x = 1"})
         ]
         arch = ArchitectAgent(

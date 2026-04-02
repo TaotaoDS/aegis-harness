@@ -4,10 +4,15 @@ Uses LLM native Tool Use (Function Calling) to write code files. A `write_file`
 tool is registered with the LLM, and the system prompt enforces that ALL code
 must be submitted via tool calls -- never as inline text.
 
+In Update Mode, the Architect also has access to `read_file` to inspect existing
+code before making targeted modifications. The existing codebase is summarized
+in the system prompt for context.
+
 Unlike the CEO (stateful orchestrator), the Architect is a stateless
 task executor -- each solve_task() call is independent.
 """
 
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from .llm_connector import ToolCall
@@ -15,11 +20,8 @@ from .workspace_manager import WorkspaceManager
 
 
 # ---------------------------------------------------------------------------
-# write_file tool definition (provider-agnostic format)
+# Tool definitions (provider-agnostic format)
 # ---------------------------------------------------------------------------
-# Connectors convert this to the provider-specific schema:
-#   OpenAI:    {"type": "function", "function": {"name":..., "parameters":...}}
-#   Anthropic: {"name":..., "input_schema":...}
 
 WRITE_FILE_TOOL: Dict[str, Any] = {
     "name": "write_file",
@@ -47,13 +49,35 @@ WRITE_FILE_TOOL: Dict[str, Any] = {
     },
 }
 
+READ_FILE_TOOL: Dict[str, Any] = {
+    "name": "read_file",
+    "description": (
+        "Read an existing file from the project deliverables. "
+        "Use this to inspect current code before modifying it. "
+        "Returns the full file content as a string."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "filepath": {
+                "type": "string",
+                "description": (
+                    "Relative file path to read "
+                    "(e.g., 'index.html', 'src/app.js')"
+                ),
+            },
+        },
+        "required": ["filepath"],
+    },
+}
+
 # Type alias for the tool-calling LLM callable.
-# Signature: (system: str, user_prompt: str, tools: List[Dict]) -> List[ToolCall]
+# Signature: (system, user_prompt, tools, tool_handler=None) -> List[ToolCall]
 ToolLLM = Callable[..., List[ToolCall]]
 
 
 # ---------------------------------------------------------------------------
-# System prompt -- instructs LLM to use write_file tool exclusively
+# System prompts
 # ---------------------------------------------------------------------------
 
 _SOLVE_SYSTEM = """\
@@ -72,6 +96,8 @@ For each file you need to create, call `write_file` with:
 - `filepath`: the relative path (e.g., "index.html", "css/style.css")
 - `content`: the complete, production-ready file content
 
+{codebase_context}
+
 {feedback_context}
 
 CRITICAL RULES:
@@ -84,6 +110,20 @@ CRITICAL RULES:
 7. Call write_file for EVERY file. Do NOT put code in your text response.
 
 IRON RULE: All output MUST be in English.
+"""
+
+_UPDATE_ADDENDUM = """\
+## UPDATE MODE
+
+You are modifying an EXISTING project, not building from scratch.
+You have access to `read_file` to inspect current code before modifying it.
+
+WORKFLOW:
+1. Use `read_file` to read any files you need to understand or modify.
+2. Make targeted, surgical changes -- do NOT rewrite files unnecessarily.
+3. Use `write_file` to submit the COMPLETE updated file content.
+   (write_file overwrites the entire file, so include ALL lines, not just diffs.)
+4. Only modify files that are relevant to the task. Leave others untouched.
 """
 
 
@@ -118,6 +158,78 @@ class ArchitectAgent:
     def file_exists(self, path: str) -> bool:
         """Check if a file exists in the workspace."""
         return self._workspace.exists(self._ws_id, path)
+
+    # --- Codebase context ---
+
+    def _list_deliverables(self) -> List[str]:
+        """Return list of files under deliverables/ in the workspace."""
+        try:
+            all_files = self._workspace.list_files(self._ws_id)
+        except Exception:
+            return []
+        return sorted(
+            f for f in all_files
+            if f.startswith("deliverables/")
+        )
+
+    def _build_codebase_context(self) -> str:
+        """Build a summary of existing deliverables for the system prompt.
+
+        Returns an empty string if no deliverables exist (green-field task).
+        When deliverables exist, returns a formatted section listing each file
+        with its line count, giving the LLM awareness of the existing codebase.
+        """
+        deliverables = self._list_deliverables()
+        if not deliverables:
+            return ""
+
+        lines = [
+            "## Existing Codebase",
+            "The project already has the following files in deliverables/.",
+            "Use `read_file` to inspect any file before modifying it,",
+            "then `write_file` to submit your changes.",
+            "",
+        ]
+        for filepath in deliverables:
+            try:
+                content = self._workspace.read(self._ws_id, filepath)
+                line_count = content.count("\n") + 1
+                display_path = filepath.removeprefix("deliverables/")
+                lines.append(f"- `{display_path}` ({line_count} lines)")
+            except Exception:
+                display_path = filepath.removeprefix("deliverables/")
+                lines.append(f"- `{display_path}` (unreadable)")
+
+        lines.append("")
+        return "\n".join(lines)
+
+    # --- Tool handler for read_file ---
+
+    def _tool_handler(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Handle tool calls during the LLM tool loop.
+
+        - read_file: returns actual file content from deliverables/
+        - write_file: returns {"status": "ok"} (file writing is handled post-loop)
+        """
+        if tool_name == "read_file":
+            filepath = arguments.get("filepath", "")
+            # Normalize path to include deliverables/ prefix
+            read_path = (
+                filepath if filepath.startswith("deliverables/")
+                else f"deliverables/{filepath}"
+            )
+            try:
+                content = self._workspace.read(self._ws_id, read_path)
+                self._bus.emit(
+                    "architect.file_read",
+                    filepath=filepath,
+                )
+                return json.dumps({"content": content})
+            except Exception as e:
+                return json.dumps({"error": f"File not found: {filepath}"})
+
+        # write_file and any other tool: acknowledge
+        return json.dumps({"status": "ok"})
 
     # --- Task operations ---
 
@@ -162,11 +274,14 @@ class ArchitectAgent:
         return basename.removesuffix(".md")
 
     def solve_task(self, task_filename: str, *, feedback: str = "") -> str:
-        """Read a task, call LLM with write_file tool, write files to workspace.
+        """Read a task, call LLM with tools, write files to workspace.
 
         Returns the artifact path (e.g. 'artifacts/task_1_solution.md').
-        The LLM is given a `write_file` tool and instructed to use it for
-        every code file. Tool calls are extracted and written to deliverables/.
+
+        When existing deliverables are present, the system prompt includes
+        a codebase summary and the read_file tool is made available alongside
+        write_file. A tool_handler callback enables read_file to return real
+        file content during the multi-turn LLM loop.
         """
         task_content = self._workspace.read(self._ws_id, task_filename)
         plan_context = self._get_plan_context()
@@ -176,15 +291,33 @@ class ArchitectAgent:
 
         self._bus.emit("architect.solving", task_id=task_id)
 
+        # Detect existing codebase for context injection
+        codebase_context = self._build_codebase_context()
+        has_existing_code = bool(codebase_context)
+
+        # If existing code, add UPDATE MODE addendum to codebase context
+        if has_existing_code:
+            codebase_context = _UPDATE_ADDENDUM + "\n" + codebase_context
+
         system_prompt = _SOLVE_SYSTEM.format(
             plan_context=plan_context,
             task_content=task_content,
             knowledge_context=knowledge_context,
             feedback_context=feedback_context,
+            codebase_context=codebase_context,
         )
 
-        # Call LLM with write_file tool -- returns List[ToolCall]
-        tool_calls = self._tool_llm(system_prompt, task_content, [WRITE_FILE_TOOL])
+        # Select tools: always write_file; add read_file when codebase exists
+        tools = [WRITE_FILE_TOOL]
+        tool_handler = None
+        if has_existing_code:
+            tools.append(READ_FILE_TOOL)
+            tool_handler = self._tool_handler
+
+        # Call LLM with tools -- returns List[ToolCall]
+        tool_calls = self._tool_llm(
+            system_prompt, task_content, tools, tool_handler,
+        )
 
         # Extract write_file calls and write files to workspace
         written_files: List[str] = []
@@ -234,7 +367,7 @@ class ArchitectAgent:
             f"# Solution: {task_id}\n\n"
             f"## Source Task\n`{task_filename}`\n\n"
             f"{files_section}"
-            f"## Tool Calls\n{len(tool_calls)} write_file call(s) executed\n"
+            f"## Tool Calls\n{len(tool_calls)} tool call(s) executed\n"
         )
         self._workspace.write(self._ws_id, artifact_path, artifact_content)
         self._bus.emit("architect.files_written", task_id=task_id, files=written_files)

@@ -14,6 +14,7 @@ from .llm_connector import (
     OpenAIConnector,
     AnthropicConnector,
     ToolCall,
+    ToolHandler,
     get_connector,
     register_connector,
 )

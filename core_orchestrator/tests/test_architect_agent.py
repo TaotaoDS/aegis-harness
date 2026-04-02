@@ -57,7 +57,7 @@ def build_architect(workspace, tool_calls=None, knowledge_context="") -> Archite
     """Build an ArchitectAgent with a mock tool_llm that returns given tool calls."""
     _calls = tool_calls if tool_calls is not None else []
 
-    def mock_tool_llm(system: str, user_prompt: str, tools):
+    def mock_tool_llm(system: str, user_prompt: str, tools, tool_handler=None):
         return _calls
 
     return ArchitectAgent(
@@ -148,7 +148,7 @@ class TestToolUseProtocol:
         """Verify the tool_llm callable receives system prompt and task content."""
         captured = {}
 
-        def capturing_tool_llm(system, user_prompt, tools):
+        def capturing_tool_llm(system, user_prompt, tools, tool_handler=None):
             captured["system"] = system
             captured["user_prompt"] = user_prompt
             captured["tools"] = tools
@@ -212,7 +212,7 @@ class TestSolveTask:
     def test_prompt_includes_task_content(self, workspace_with_tasks):
         captured = {}
 
-        def capturing_tool_llm(system, user_prompt, tools):
+        def capturing_tool_llm(system, user_prompt, tools, tool_handler=None):
             captured["system"] = system
             captured["user_prompt"] = user_prompt
             return []
@@ -227,7 +227,7 @@ class TestSolveTask:
         workspace_with_tasks.write("proj", "plan.md", "# Plan\n## task_1: Design API")
         captured = {}
 
-        def capturing_tool_llm(system, user_prompt, tools):
+        def capturing_tool_llm(system, user_prompt, tools, tool_handler=None):
             captured["system"] = system
             return []
 
@@ -246,7 +246,7 @@ class TestSolveTask:
         workspace_with_tasks.write("proj", "feedback/task_1_feedback.md", "Missing auth handling")
         captured = {}
 
-        def capturing_tool_llm(system, user_prompt, tools):
+        def capturing_tool_llm(system, user_prompt, tools, tool_handler=None):
             captured["system"] = system
             return []
 
@@ -263,7 +263,7 @@ class TestKnowledgeInjection:
     def test_knowledge_injected_into_prompt(self, workspace_with_tasks):
         captured = {}
 
-        def capturing_tool_llm(system, user_prompt, tools):
+        def capturing_tool_llm(system, user_prompt, tools, tool_handler=None):
             captured["system"] = system
             return []
 
@@ -277,7 +277,7 @@ class TestKnowledgeInjection:
     def test_empty_knowledge_no_section(self, workspace_with_tasks):
         captured = {}
 
-        def capturing_tool_llm(system, user_prompt, tools):
+        def capturing_tool_llm(system, user_prompt, tools, tool_handler=None):
             captured["system"] = system
             return []
 
@@ -330,7 +330,7 @@ class TestEventBusIntegration:
         from core_orchestrator.event_bus import ListBus
         bus = ListBus()
 
-        def mock_tool_llm(system, user_prompt, tools):
+        def mock_tool_llm(system, user_prompt, tools, tool_handler=None):
             return make_single_tool_call()
 
         arch = ArchitectAgent(
@@ -348,7 +348,7 @@ class TestEventBusIntegration:
         bus = ListBus()
 
         arch = ArchitectAgent(
-            tool_llm=lambda s, p, t: [], workspace=workspace_with_tasks,
+            tool_llm=lambda s, p, t, h=None: [], workspace=workspace_with_tasks,
             workspace_id="proj", bus=bus,
         )
         arch.solve_task("tasks/task_1.md")
@@ -361,7 +361,7 @@ class TestEventBusIntegration:
         calls = make_tool_calls({"a.py": "x=1", "b.py": "y=2"})
 
         arch = ArchitectAgent(
-            tool_llm=lambda s, p, t: calls, workspace=workspace_with_tasks,
+            tool_llm=lambda s, p, t, h=None: calls, workspace=workspace_with_tasks,
             workspace_id="proj", bus=bus,
         )
         arch.solve_task("tasks/task_1.md")

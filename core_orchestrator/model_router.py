@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import yaml
 from dotenv import load_dotenv
 
-from .llm_connector import ToolCall, get_connector
+from .llm_connector import ToolCall, ToolHandler, get_connector
 
 _DEFAULT_TEMPERATURE = 0.7
 
@@ -115,8 +115,13 @@ class ModelRouter:
         user_prompt: str,
         tools: List[Dict[str, Any]],
         max_rounds: int = 10,
+        tool_handler: ToolHandler = None,
     ) -> List[ToolCall]:
         """Call a model with Tool Use (Function Calling).
+
+        If tool_handler is provided, it is invoked for each tool call and
+        its return value (a JSON string) is sent back to the model as the
+        tool result. This enables tools like read_file to return real content.
 
         Returns a list of ToolCall objects collected across all rounds.
         """
@@ -140,6 +145,7 @@ class ModelRouter:
             temperature=temperature,
             base_url=base_url,
             max_rounds=max_rounds,
+            tool_handler=tool_handler,
         )
 
     def as_llm(self, **context: str) -> Callable[[str], str]:
@@ -157,7 +163,7 @@ class ModelRouter:
     def as_tool_llm(self, **context: str) -> Callable:
         """Return a callable for Tool Use calls.
 
-        Signature: (system: str, user_prompt: str, tools: List[Dict]) -> List[ToolCall]
+        Signature: (system, user_prompt, tools, tool_handler=None) -> List[ToolCall]
 
         The model is resolved once at creation time based on the context.
         """
@@ -167,12 +173,14 @@ class ModelRouter:
             system: str,
             user_prompt: str,
             tools: List[Dict[str, Any]],
+            tool_handler: ToolHandler = None,
         ) -> List[ToolCall]:
             return self.call_with_tools(
                 model_name,
                 system=system,
                 user_prompt=user_prompt,
                 tools=tools,
+                tool_handler=tool_handler,
             )
 
         return _tool_llm

@@ -1,14 +1,20 @@
 """CEO orchestrator agent with reverse-interview and task delegation.
 
-State machine: idle -> interviewing -> planning -> delegating -> done
+State machine:
+  Green-field: idle -> interviewing -> planning -> delegating -> done
+  Update mode: idle -> update_planning -> delegating -> done
 
 The CEO never writes code. It clarifies requirements via reverse interview,
 decomposes work into a structured plan, and delegates sub-tasks to the
 shared workspace for downstream agents.
+
+In Update Mode, the CEO reads existing deliverables and generates incremental
+modification/fix tasks instead of a full decomposition from scratch.
 """
 
 import json
-from typing import Optional
+import re
+from typing import List, Optional
 
 from .json_parser import parse_llm_json
 from .llm_gateway import LLMGateway
@@ -64,6 +70,40 @@ Rules:
 IRON RULE: All output MUST be in English. Internal workspace artifacts \
 (plan.md, tasks/*.md, feedback/*.md, docs/solutions/*.md) are strictly \
 English-only to minimize token cost and maximize model reasoning quality.
+"""
+
+_UPDATE_PLAN_SYSTEM = """\
+You are a senior technical project manager performing an UPDATE to an \
+existing project. You must generate focused, incremental tasks to modify \
+or fix the existing codebase.
+
+## Existing Project Files
+{file_listing}
+
+## Update Requirement
+{requirement}
+
+Generate 1-5 focused, incremental tasks. Each task should target specific \
+files that need modification.
+
+Task IDs MUST start from {next_task_id} (e.g., "task_{next_task_num}").
+Do NOT reuse IDs of existing tasks.
+
+Respond in strict JSON (no markdown fences):
+{{"tasks": [
+  {{"id": "task_{next_task_num}", "title": "...", "description": "...", \
+"priority": "high|medium|low", "files_to_modify": ["file1.html", "file2.js"]}},
+  ...
+]}}
+
+Rules:
+- Each task must reference specific files to modify in "files_to_modify".
+- Descriptions must be precise: explain WHAT to change and WHY.
+- For bug fixes: include reproduction steps or symptoms in the description.
+- For new features: explain how they integrate with existing code.
+- Priorities: high (blocking/critical bug), medium (important), low (nice-to-have).
+
+IRON RULE: All output MUST be in English.
 """
 
 
@@ -194,6 +234,105 @@ class CEOAgent:
         self._state = "delegating"
         return self._plan
 
+    # --- Update mode ---
+
+    def _scan_deliverables(self) -> str:
+        """List existing deliverables with line counts for context."""
+        try:
+            all_files = self._workspace.list_files(self._ws_id)
+        except Exception:
+            return "(no files found)"
+
+        deliverables = sorted(
+            f for f in all_files if f.startswith("deliverables/")
+        )
+        if not deliverables:
+            return "(no deliverables yet)"
+
+        lines = []
+        for filepath in deliverables:
+            display = filepath.removeprefix("deliverables/")
+            try:
+                content = self._workspace.read(self._ws_id, filepath)
+                lc = content.count("\n") + 1
+                lines.append(f"- {display} ({lc} lines)")
+            except Exception:
+                lines.append(f"- {display} (unreadable)")
+        return "\n".join(lines)
+
+    def _next_task_id(self) -> int:
+        """Find the next available task ID number by scanning existing tasks."""
+        try:
+            all_files = self._workspace.list_files(self._ws_id)
+        except Exception:
+            return 1
+
+        max_num = 0
+        for f in all_files:
+            if f.startswith("tasks/") and f.endswith(".md"):
+                # Extract number from e.g. "tasks/task_7.md" or "tasks/task_12_fix_button.md"
+                basename = f.removeprefix("tasks/").removesuffix(".md")
+                m = re.match(r"task_(\d+)", basename)
+                if m:
+                    max_num = max(max_num, int(m.group(1)))
+        return max_num + 1
+
+    def plan_update(self, requirement: str) -> dict:
+        """Generate incremental update/fix tasks based on existing codebase.
+
+        Reads existing deliverables, determines next task ID, and calls the
+        LLM to generate targeted modification tasks.
+
+        Transitions: idle -> delegating
+        """
+        self._require_state("idle")
+        self._requirement = requirement
+        self._state = "update_planning"
+
+        # Persist update requirement
+        self._workspace.write(
+            self._ws_id, "update_requirement.md",
+            f"# Update Requirement\n\n{requirement}\n",
+        )
+
+        file_listing = self._scan_deliverables()
+        next_num = self._next_task_id()
+
+        prompt = _UPDATE_PLAN_SYSTEM.format(
+            file_listing=file_listing,
+            requirement=requirement,
+            next_task_id=f"task_{next_num}",
+            next_task_num=next_num,
+        )
+        result = self._gateway.send(prompt)
+        self._plan = parse_llm_json(
+            result["llm_response"],
+            fallback={"tasks": []},
+        )
+
+        # Append to plan.md
+        lines = [f"\n\n# Update Plan (from task_{next_num})\n"]
+        for task in self._plan.get("tasks", []):
+            lines.append(f"## {task['id']}: {task['title']}")
+            lines.append(f"- **Priority:** {task['priority']}")
+            lines.append(f"- **Description:** {task['description']}")
+            files_to_mod = task.get("files_to_modify", [])
+            if files_to_mod:
+                lines.append(f"- **Files to modify:** {', '.join(files_to_mod)}")
+            lines.append("")
+
+        # Append rather than overwrite plan.md
+        existing_plan = ""
+        if self._workspace.exists(self._ws_id, "plan.md"):
+            existing_plan = self._workspace.read(self._ws_id, "plan.md")
+        self._workspace.write(
+            self._ws_id, "plan.md",
+            existing_plan + "\n".join(lines),
+        )
+
+        self._state = "delegating"
+        return self._plan
+
     # --- Delegate ---
 
     def delegate(self) -> list[str]:
@@ -203,12 +342,18 @@ class CEOAgent:
         files = []
         for task in self._plan.get("tasks", []):
             filename = f"tasks/{task['id']}.md"
-            content = (
-                f"# {task['title']}\n\n"
-                f"- **ID:** {task['id']}\n"
-                f"- **Priority:** {task['priority']}\n"
-                f"- **Description:** {task['description']}\n"
-            )
+            # Build task file content with optional update-mode fields
+            lines = [
+                f"# {task['title']}\n",
+                f"- **ID:** {task['id']}",
+                f"- **Priority:** {task['priority']}",
+                f"- **Description:** {task['description']}",
+            ]
+            files_to_mod = task.get("files_to_modify", [])
+            if files_to_mod:
+                lines.append(f"- **Type:** update")
+                lines.append(f"- **Files to modify:** {', '.join(files_to_mod)}")
+            content = "\n".join(lines) + "\n"
             self._workspace.write(self._ws_id, filename, content)
             files.append(filename)
 

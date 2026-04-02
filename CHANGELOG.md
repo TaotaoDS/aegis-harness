@@ -2,6 +2,58 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] — 2026-04-02
+
+### Major Features
+
+- **Update Mode — incremental project iteration & bug fixing** (`--update / -u`):
+  New CLI entry point for modifying existing projects without rebuilding from
+  scratch. Run `python main.py -u "Fix the login button color"` to generate
+  targeted modification tasks that surgically update existing deliverables.
+
+  **CEO Agent** (`ceo_agent.py`):
+  - `plan_update(requirement)` reads existing `deliverables/` via
+    `_scan_deliverables()`, determines the next available task ID via
+    `_next_task_id()`, and calls the LLM to generate 1-5 focused update tasks.
+  - Tasks include a `files_to_modify` field listing specific files to change.
+  - Appends to `plan.md` instead of overwriting; preserves existing task files.
+  - State machine: `idle → update_planning → delegating → done`.
+
+  **Architect Agent** (`architect_agent.py`):
+  - Auto-detects existing codebase via `_build_codebase_context()` and injects
+    a file listing with line counts into the system prompt.
+  - When existing code is detected, adds `_UPDATE_ADDENDUM` instructions and
+    registers a `read_file` tool alongside `write_file`.
+  - `_tool_handler` callback enables `read_file` to return real file content
+    during multi-turn LLM loops, allowing the Architect to inspect code before
+    making targeted modifications.
+
+  **Pipeline** (`main.py`):
+  - `run_update_mode()` orchestrates: CEO plan_update → delegate → execute
+    only the new tasks via ResilienceManager.
+  - `--update / -u` argument short-circuits the normal pipeline.
+
+- **`ToolHandler` callback type** (`llm_connector.py`):
+  `Callable[[str, Dict[str, Any]], str]` — invoked for each tool call during
+  the multi-turn loop. Returns a JSON string fed back to the model as the tool
+  result. Threaded through `call_with_tools()` on both connectors,
+  `ModelRouter.call_with_tools()`, and `as_tool_llm()`.
+
+- **`READ_FILE_TOOL` schema** (`architect_agent.py`):
+  Provider-agnostic tool definition for reading existing project files.
+  Conditionally registered when the workspace has existing deliverables.
+
+### Tests
+
+- New `test_update_mode.py` (31 tests): CEO plan_update, _scan_deliverables,
+  _next_task_id, Architect codebase context injection, read_file tool handler,
+  run_update_mode end-to-end, CLI argument parsing.
+- Updated all mock `tool_llm` signatures across 6 test files to accept the
+  optional `tool_handler` parameter.
+- Total: 417 tests passing.
+
+---
+
 ## [0.6.0] — 2026-04-02
 
 ### Breaking Changes

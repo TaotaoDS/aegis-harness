@@ -33,7 +33,7 @@ def _make_write_file_tool_llm(files=None):
     if files is None:
         files = {"app.py": "print('hello')"}
 
-    def tool_llm(system, user_prompt, tools):
+    def tool_llm(system, user_prompt, tools, tool_handler=None):
         return [
             ToolCall(name="write_file", arguments={"filepath": p, "content": c})
             for p, c in files.items()

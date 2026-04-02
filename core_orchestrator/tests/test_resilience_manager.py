@@ -80,7 +80,7 @@ def build_manager(
     qa_idx = {"i": 0}
     esc_idx = {"i": 0}
 
-    def tool_llm(system, user_prompt, tools):
+    def tool_llm(system, user_prompt, tools, tool_handler=None):
         idx = arch_idx["i"]
         arch_idx["i"] += 1
         if idx < len(architect_tool_calls_sequence):
@@ -96,7 +96,7 @@ def build_manager(
 
     esc_sequence = escalated_tool_calls_sequence or architect_tool_calls_sequence
 
-    def escalated_tool_llm(system, user_prompt, tools):
+    def escalated_tool_llm(system, user_prompt, tools, tool_handler=None):
         idx = esc_idx["i"]
         esc_idx["i"] += 1
         if idx < len(esc_sequence):
@@ -152,7 +152,7 @@ class TestLayer2ModelEscalation:
     def test_second_fail_escalates_model(self, workspace):
         escalated_used = {"flag": False}
 
-        def esc_tool_llm(system, user_prompt, tools):
+        def esc_tool_llm(system, user_prompt, tools, tool_handler=None):
             escalated_used["flag"] = True
             return make_tool_calls({"app.py": "escalated = True\n"})
 
@@ -161,7 +161,7 @@ class TestLayer2ModelEscalation:
 
         rm = ResilienceManager(
             workspace=workspace, workspace_id="proj",
-            tool_llm=lambda s, p, t: make_tool_calls({"app.py": "x = 1\n"}),
+            tool_llm=lambda s, p, t, h=None: make_tool_calls({"app.py": "x = 1\n"}),
             qa_gateway=qa_gw,
             escalated_tool_llm=esc_tool_llm,
         )

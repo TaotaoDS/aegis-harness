@@ -18,7 +18,12 @@ To add a new provider (e.g. Gemini):
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+
+# Callback type for handling tool calls during multi-turn loops.
+# Signature: (tool_name: str, arguments: Dict) -> str (JSON result content)
+# When None, all tool calls receive {"status": "ok"} as the result.
+ToolHandler = Optional[Callable[[str, Dict[str, Any]], str]]
 
 
 # ---------------------------------------------------------------------------
@@ -103,11 +108,13 @@ class OpenAIConnector:
         temperature: float,
         base_url: Optional[str] = None,
         max_rounds: int = 10,
+        tool_handler: ToolHandler = None,
     ) -> List[ToolCall]:
         """Multi-turn tool loop. Returns all tool calls collected across rounds.
 
-        The loop continues until the model stops calling tools (finish_reason
-        becomes 'stop') or max_rounds is reached.
+        If tool_handler is provided, it is called for each tool invocation
+        and its return value is sent back to the model as the tool result.
+        This enables tools like read_file to return real content.
         """
         OpenAI = self._import_openai()
         client = OpenAI(api_key=api_key, base_url=base_url)
@@ -171,10 +178,18 @@ class OpenAIConnector:
                     ],
                 })
                 for tc in msg.tool_calls:
+                    try:
+                        tc_args = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        tc_args = {}
+                    if tool_handler:
+                        result_content = tool_handler(tc.function.name, tc_args)
+                    else:
+                        result_content = json.dumps({"status": "ok"})
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": json.dumps({"status": "ok"}),
+                        "content": result_content,
                     })
 
             # Stop when model is done (no more tool calls)
@@ -224,8 +239,13 @@ class AnthropicConnector:
         temperature: float,
         base_url: Optional[str] = None,
         max_rounds: int = 10,
+        tool_handler: ToolHandler = None,
     ) -> List[ToolCall]:
-        """Multi-turn tool loop for Anthropic. Returns all tool calls."""
+        """Multi-turn tool loop for Anthropic. Returns all tool calls.
+
+        If tool_handler is provided, it is called for each tool invocation
+        and its return value is sent back to the model as the tool result.
+        """
         Anthropic = self._import_anthropic()
         client = Anthropic(api_key=api_key, base_url=base_url)
 
@@ -266,17 +286,19 @@ class AnthropicConnector:
 
             # Feed tool results back for multi-turn
             messages.append({"role": "assistant", "content": msg.content})
-            messages.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": b.id,
-                        "content": json.dumps({"status": "ok"}),
-                    }
-                    for b in tool_blocks
-                ],
-            })
+            tool_results = []
+            for b in tool_blocks:
+                b_args = b.input if isinstance(b.input, dict) else {}
+                if tool_handler:
+                    result_content = tool_handler(b.name, b_args)
+                else:
+                    result_content = json.dumps({"status": "ok"})
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": b.id,
+                    "content": result_content,
+                })
+            messages.append({"role": "user", "content": tool_results})
 
         return all_calls
 
