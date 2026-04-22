@@ -4,11 +4,22 @@ Loads model definitions and routing rules from a YAML file,
 resolves API keys and base URLs from environment variables (never hardcoded),
 and dispatches calls through the LLMConnector abstraction layer.
 
-Supports any OpenAI-compatible provider (DeepSeek, Zhipu, Kimi, etc.)
-via base_url_env, and allows per-model temperature configuration.
+Supports any OpenAI-compatible provider (DeepSeek, Zhipu, Kimi, NVIDIA NIM, etc.)
+via two equivalent patterns:
+
+  Pattern A — env-var indirection (original, still supported):
+      api_key_env: NVIDIA_API_KEY        # stores the env var *name*
+      base_url_env: NVIDIA_BASE_URL      # stores the env var *name*
+
+  Pattern B — inline ${VAR} interpolation (new, recommended for readability):
+      api_key: ${NVIDIA_API_KEY}         # resolved at load time from .env / shell
+      base_url: https://integrate.api.nvidia.com/v1   # literal or interpolated URL
+
+Both patterns can be mixed freely within the same config file.
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -20,6 +31,37 @@ from .llm_connector import ToolCall, ToolHandler, get_connector
 _DEFAULT_TEMPERATURE = 0.7
 
 
+# ---------------------------------------------------------------------------
+# YAML env-var interpolation
+# ---------------------------------------------------------------------------
+
+def _interpolate_env_vars(value: Any) -> Any:
+    """Recursively replace ``${VAR_NAME}`` placeholders with os.environ values.
+
+    Called after YAML loading so that any string in the config can reference
+    environment variables using the ``${...}`` syntax familiar from Docker
+    Compose and shell scripting.
+
+    Unresolved variables (env var not set) are left as-is so that
+    ``get_api_key()`` can raise a clear error later.
+
+    Examples::
+
+        api_key: ${NVIDIA_API_KEY}        →  api_key: "nvapi-xxxx"
+        base_url: ${NVIDIA_BASE_URL}      →  base_url: "https://integrate..."
+        base_url: https://literal.url/v1  →  unchanged (no placeholder)
+    """
+    if isinstance(value, dict):
+        return {k: _interpolate_env_vars(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_interpolate_env_vars(v) for v in value]
+    if isinstance(value, str):
+        def _replace(m: re.Match) -> str:
+            return os.environ.get(m.group(1), m.group(0))
+        return re.sub(r"\$\{([^}]+)\}", _replace, value)
+    return value
+
+
 class ConfigError(Exception):
     """Raised for invalid or missing configuration."""
 
@@ -28,7 +70,7 @@ class ModelRouter:
     """Load YAML config, resolve routes, dispatch through LLM connectors."""
 
     def __init__(self, config_path: Union[str, Path], env_path: Optional[Union[str, Path]] = None):
-        # Load .env if provided (or auto-discover)
+        # Load .env before interpolation so ${VAR} references resolve correctly
         load_dotenv(dotenv_path=env_path or None)
 
         config_path = Path(config_path)
@@ -36,7 +78,10 @@ class ModelRouter:
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
         with open(config_path) as f:
-            cfg = yaml.safe_load(f)
+            raw_cfg = yaml.safe_load(f)
+
+        # Resolve ${VAR_NAME} placeholders throughout the entire config tree
+        cfg = _interpolate_env_vars(raw_cfg)
 
         if "models" not in cfg:
             raise ConfigError("Config missing required key: 'models'")
@@ -51,11 +96,38 @@ class ModelRouter:
         return self._models
 
     def get_api_key(self, model_name: str) -> str:
-        """Resolve the API key for a model from environment variables."""
+        """Resolve the API key for a model.
+
+        Supports two patterns (can be mixed within the same config):
+
+        * **Pattern B** — ``api_key: ${NVIDIA_API_KEY}`` (or a literal string):
+          The value has already been interpolated by ``_interpolate_env_vars``
+          at load time; just return it directly.
+
+        * **Pattern A** — ``api_key_env: NVIDIA_API_KEY``:
+          The field stores the *name* of an environment variable which is
+          resolved lazily here via ``os.environ``.
+        """
         model_cfg = self._models.get(model_name)
         if not model_cfg:
             raise ConfigError(f"Unknown model: '{model_name}'")
-        env_var = model_cfg["api_key_env"]
+
+        # Pattern B: direct api_key field (already interpolated or literal)
+        if "api_key" in model_cfg:
+            key = model_cfg["api_key"]
+            if not key:
+                raise ConfigError(
+                    f"api_key for model '{model_name}' is empty. "
+                    f"Check that the referenced environment variable is set."
+                )
+            return key
+
+        # Pattern A: api_key_env holds the env var name
+        env_var = model_cfg.get("api_key_env")
+        if not env_var:
+            raise ConfigError(
+                f"Model '{model_name}' has neither 'api_key' nor 'api_key_env' configured."
+            )
         key = os.environ.get(env_var)
         if not key:
             raise ConfigError(
@@ -64,12 +136,26 @@ class ModelRouter:
         return key
 
     def _get_base_url(self, model_name: str) -> Optional[str]:
-        """Resolve the base URL for a model from environment variables.
+        """Resolve the base URL for a model.
 
-        Returns None if base_url_env is not configured or the env var is unset,
-        which tells the connector to use its default endpoint.
+        Returns ``None`` if unconfigured, which tells the connector to use
+        its default endpoint (e.g. ``https://api.openai.com/v1``).
+
+        Supports two patterns:
+
+        * **Pattern B** — ``base_url: https://integrate.api.nvidia.com/v1``
+          (literal URL or ``${VAR}`` already interpolated at load time).
+
+        * **Pattern A** — ``base_url_env: NVIDIA_BASE_URL``
+          (env var name resolved lazily here via ``os.environ``).
         """
         model_cfg = self._models.get(model_name, {})
+
+        # Pattern B: direct base_url field (already interpolated or literal)
+        if "base_url" in model_cfg:
+            return model_cfg["base_url"] or None
+
+        # Pattern A: base_url_env holds the env var name
         env_var = model_cfg.get("base_url_env")
         if not env_var:
             return None

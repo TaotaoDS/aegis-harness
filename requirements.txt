@@ -1,0 +1,19 @@
+# =============================================================================
+# Enterprise Harness — Python dependencies
+# =============================================================================
+# Install:  pip install -r requirements.txt
+# =============================================================================
+
+# LLM provider SDKs
+openai>=1.30.0          # OpenAI + all OpenAI-compatible APIs (NVIDIA NIM, DeepSeek, Zhipu, etc.)
+anthropic>=0.28.0       # Anthropic Claude API
+
+# Config & environment
+pyyaml>=6.0             # YAML config parsing (models_config.yaml)
+python-dotenv>=1.0.0    # .env file loading
+
+# Token accounting
+tiktoken>=0.7.0         # Token counting for budget tracking
+
+# Testing
+pytest>=8.0.0           # Test runner

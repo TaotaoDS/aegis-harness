@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import yaml
+from dotenv import load_dotenv
+
+# Load .env at process start so every component (ModelRouter, direct env reads,
+# third-party SDK auto-detection) sees the variables immediately.
+# A .env file is optional — if absent, shell env vars are used as-is.
+load_dotenv()
 
 from core_orchestrator.llm_gateway import LLMGateway
 from core_orchestrator.pii_sanitizer import default_pipeline

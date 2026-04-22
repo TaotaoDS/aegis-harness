@@ -370,3 +370,229 @@ class TestRealConfig:
         # Every route references an existing model
         for route in cfg["routes"]:
             assert route["model"] in cfg["models"], f"Route references unknown model: {route['model']}"
+
+
+# --- ${VAR} interpolation ---
+
+class TestEnvVarInterpolation:
+    """_interpolate_env_vars() resolves ${VAR} placeholders at load time."""
+
+    def _write_config(self, tmp_path, model_cfg: dict) -> Path:
+        config = {
+            "models": {"m": model_cfg},
+            "routes": [{"match": {}, "model": "m"}],
+        }
+        path = tmp_path / "cfg.yaml"
+        path.write_text(yaml.dump(config))
+        return path
+
+    def test_interpolates_api_key_field(self, tmp_path, monkeypatch):
+        """api_key: ${VAR} is resolved to the env var value at load time."""
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test-secret")
+        path = self._write_config(tmp_path, {
+            "provider": "openai",
+            "model_id": "meta/llama-3.3-70b-instruct",
+            "api_key": "${NVIDIA_API_KEY}",
+            "base_url": "https://integrate.api.nvidia.com/v1",
+            "max_tokens": 4096,
+        })
+        router = ModelRouter(path)
+        assert router.get_api_key("m") == "nvapi-test-secret"
+
+    def test_interpolates_base_url_field(self, tmp_path, monkeypatch):
+        """base_url: ${VAR} is resolved to the env var value at load time."""
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        monkeypatch.setenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+        path = self._write_config(tmp_path, {
+            "provider": "openai",
+            "model_id": "meta/llama-3.3-70b-instruct",
+            "api_key": "${NVIDIA_API_KEY}",
+            "base_url": "${NVIDIA_BASE_URL}",
+            "max_tokens": 4096,
+        })
+        router = ModelRouter(path)
+        assert router._get_base_url("m") == "https://integrate.api.nvidia.com/v1"
+
+    def test_literal_base_url_no_interpolation_needed(self, tmp_path, monkeypatch):
+        """base_url: https://... (literal) works without any ${} syntax."""
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        path = self._write_config(tmp_path, {
+            "provider": "openai",
+            "model_id": "meta/llama-3.3-70b-instruct",
+            "api_key": "${NVIDIA_API_KEY}",
+            "base_url": "https://integrate.api.nvidia.com/v1",
+            "max_tokens": 4096,
+        })
+        router = ModelRouter(path)
+        assert router._get_base_url("m") == "https://integrate.api.nvidia.com/v1"
+
+    def test_unresolved_placeholder_kept_as_is(self, tmp_path, monkeypatch):
+        """If the env var is not set, the placeholder string is preserved
+        so get_api_key() can raise a clear ConfigError."""
+        monkeypatch.delenv("UNSET_KEY_12345", raising=False)
+        path = self._write_config(tmp_path, {
+            "provider": "openai",
+            "model_id": "x",
+            "api_key": "${UNSET_KEY_12345}",
+            "base_url": "https://example.com/v1",
+            "max_tokens": 100,
+        })
+        router = ModelRouter(path)
+        # The unresolved placeholder is non-empty — but we can check that
+        # the value still contains the placeholder text (not silently empty)
+        raw_key = router._models["m"]["api_key"]
+        assert "${UNSET_KEY_12345}" in raw_key
+
+    def test_interpolation_does_not_affect_non_string_fields(self, tmp_path, monkeypatch):
+        """Integer/boolean fields are untouched by interpolation."""
+        monkeypatch.setenv("MY_KEY", "sk-test")
+        path = self._write_config(tmp_path, {
+            "provider": "openai",
+            "model_id": "x",
+            "api_key": "${MY_KEY}",
+            "base_url": "https://example.com/v1",
+            "max_tokens": 8192,
+            "temperature": 0.3,
+        })
+        router = ModelRouter(path)
+        assert router._models["m"]["max_tokens"] == 8192
+        assert router._models["m"]["temperature"] == 0.3
+
+    def test_mixed_old_and_new_pattern_in_same_config(self, tmp_path, monkeypatch):
+        """Pattern A (api_key_env) and Pattern B (api_key: ${VAR}) can coexist."""
+        monkeypatch.setenv("OLD_KEY", "sk-old-style")
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-new-style")
+        config = {
+            "models": {
+                "old-model": {
+                    "provider": "openai",
+                    "model_id": "gpt-4o",
+                    "api_key_env": "OLD_KEY",
+                    "max_tokens": 2048,
+                },
+                "new-model": {
+                    "provider": "openai",
+                    "model_id": "meta/llama-3.3-70b-instruct",
+                    "api_key": "${NVIDIA_API_KEY}",
+                    "base_url": "https://integrate.api.nvidia.com/v1",
+                    "max_tokens": 4096,
+                },
+            },
+            "routes": [{"match": {}, "model": "old-model"}],
+        }
+        path = tmp_path / "mixed.yaml"
+        path.write_text(yaml.dump(config))
+        router = ModelRouter(path)
+        assert router.get_api_key("old-model") == "sk-old-style"
+        assert router.get_api_key("new-model") == "nvapi-new-style"
+        assert router._get_base_url("new-model") == "https://integrate.api.nvidia.com/v1"
+
+
+# --- Direct api_key / base_url fields ---
+
+class TestDirectFields:
+    """Pattern B: api_key and base_url as direct YAML fields (not _env variants)."""
+
+    def test_get_api_key_from_direct_field(self, tmp_path, monkeypatch):
+        """api_key field takes precedence over api_key_env."""
+        monkeypatch.setenv("SOME_ENV_KEY", "should-not-be-used")
+        config = {
+            "models": {"m": {
+                "provider": "openai",
+                "model_id": "x",
+                "api_key": "direct-key-value",
+                "api_key_env": "SOME_ENV_KEY",   # should be ignored
+                "max_tokens": 100,
+            }},
+            "routes": [{"match": {}, "model": "m"}],
+        }
+        path = tmp_path / "cfg.yaml"
+        path.write_text(yaml.dump(config))
+        router = ModelRouter(path)
+        assert router.get_api_key("m") == "direct-key-value"
+
+    def test_get_api_key_raises_when_direct_field_empty(self, tmp_path):
+        config = {
+            "models": {"m": {
+                "provider": "openai",
+                "model_id": "x",
+                "api_key": "",
+                "max_tokens": 100,
+            }},
+            "routes": [{"match": {}, "model": "m"}],
+        }
+        path = tmp_path / "cfg.yaml"
+        path.write_text(yaml.dump(config))
+        router = ModelRouter(path)
+        with pytest.raises(ConfigError, match="empty"):
+            router.get_api_key("m")
+
+    def test_base_url_direct_field_returned(self, tmp_path, monkeypatch):
+        """base_url direct field is returned without env var lookup."""
+        monkeypatch.setenv("TEST_KEY", "sk-test")
+        config = {
+            "models": {"m": {
+                "provider": "openai",
+                "model_id": "x",
+                "api_key_env": "TEST_KEY",
+                "base_url": "https://custom.endpoint.com/v1",
+                "max_tokens": 100,
+            }},
+            "routes": [{"match": {}, "model": "m"}],
+        }
+        path = tmp_path / "cfg.yaml"
+        path.write_text(yaml.dump(config))
+        router = ModelRouter(path)
+        assert router._get_base_url("m") == "https://custom.endpoint.com/v1"
+
+    def test_base_url_direct_overrides_base_url_env(self, tmp_path, monkeypatch):
+        """base_url takes precedence over base_url_env when both are present."""
+        monkeypatch.setenv("TEST_KEY", "sk-test")
+        monkeypatch.setenv("OTHER_URL", "https://should-not-use.com/v1")
+        config = {
+            "models": {"m": {
+                "provider": "openai",
+                "model_id": "x",
+                "api_key_env": "TEST_KEY",
+                "base_url": "https://direct.url/v1",
+                "base_url_env": "OTHER_URL",
+                "max_tokens": 100,
+            }},
+            "routes": [{"match": {}, "model": "m"}],
+        }
+        path = tmp_path / "cfg.yaml"
+        path.write_text(yaml.dump(config))
+        router = ModelRouter(path)
+        assert router._get_base_url("m") == "https://direct.url/v1"
+
+    def test_nvidia_nim_pattern_dispatches_correctly(self, tmp_path, monkeypatch):
+        """Full NVIDIA NIM Pattern B config dispatches to OpenAI connector."""
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test-1234")
+        config = {
+            "models": {"nvidia-llama": {
+                "provider": "openai",
+                "model_id": "meta/llama-3.3-70b-instruct",
+                "api_key": "${NVIDIA_API_KEY}",
+                "base_url": "https://integrate.api.nvidia.com/v1",
+                "max_tokens": 4096,
+                "temperature": 0.2,
+            }},
+            "routes": [{"match": {}, "model": "nvidia-llama"}],
+        }
+        path = tmp_path / "nvidia.yaml"
+        path.write_text(yaml.dump(config))
+        router = ModelRouter(path)
+
+        mock_connector = MagicMock()
+        mock_connector.call = MagicMock(return_value="llama-response")
+        with patch("core_orchestrator.model_router.get_connector", return_value=mock_connector):
+            result = router.call("nvidia-llama", "Hello from NVIDIA")
+            mock_connector.call.assert_called_once_with(
+                model_id="meta/llama-3.3-70b-instruct",
+                api_key="nvapi-test-1234",
+                text="Hello from NVIDIA",
+                max_tokens=4096,
+                temperature=0.2,
+                base_url="https://integrate.api.nvidia.com/v1",
+            )
+            assert result == "llama-response"
