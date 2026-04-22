@@ -54,6 +54,7 @@ class ResilienceManager:
         knowledge_context: str = "",
         bus=None,
         escalated_tool_llm: Optional[ToolLLM] = None,
+        hitl_manager=None,
     ):
         from .event_bus import NullBus
         self._workspace = workspace
@@ -68,6 +69,7 @@ class ResilienceManager:
         self._knowledge_manager = knowledge_manager
         self._knowledge_context = knowledge_context
         self._bus = bus or NullBus()
+        self._hitl_manager = hitl_manager   # Optional HITLManager forwarded to ArchitectAgent
         self._token_usage = 0
         self._results: List[Dict] = []
 
@@ -171,6 +173,7 @@ class ResilienceManager:
                 workspace_id=self._ws_id,
                 knowledge_context=self._knowledge_context,
                 bus=self._bus,
+                hitl_manager=self._hitl_manager,
             )
             architect.solve_task(task_file)
             self._bus.emit("architect.solve_complete", task_id=task_id, attempt=attempt)

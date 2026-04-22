@@ -137,6 +137,7 @@ class ArchitectAgent:
         workspace_id: str,
         knowledge_context: str = "",
         bus=None,
+        hitl_manager=None,
     ):
         from .event_bus import NullBus
         self._tool_llm = tool_llm
@@ -144,6 +145,7 @@ class ArchitectAgent:
         self._ws_id = workspace_id
         self._knowledge_context = knowledge_context
         self._bus = bus or NullBus()
+        self._hitl_manager = hitl_manager   # Optional HITLManager for sensitive-file gates
 
     # --- File tools (workspace-scoped) ---
 
@@ -326,6 +328,17 @@ class ArchitectAgent:
                 filepath = tc.arguments.get("filepath", "")
                 content = tc.arguments.get("content", "")
                 if filepath and content:
+                    # ── HITL gate 2: block before writing sensitive files ──
+                    if self._hitl_manager:
+                        allowed = self._hitl_manager.check_file_write(filepath, content)
+                        if not allowed:
+                            self._bus.emit(
+                                "architect.file_write_blocked",
+                                task_id=task_id,
+                                filepath=filepath,
+                            )
+                            continue
+
                     full_path = (
                         f"deliverables/{filepath}"
                         if not filepath.startswith("deliverables/")
