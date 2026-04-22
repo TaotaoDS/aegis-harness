@@ -58,6 +58,14 @@ EVENT_LABELS: Dict[str, str] = {
     "hitl.approved":              "✅ 已批准，继续执行…",
     "hitl.rejected":              "⛔ 已拒绝，操作已取消",
 
+    # CEO interview confidence
+    "ceo.interview_complete":     "✅ 需求访谈完成，置信度 {confidence}%",
+
+    # Reflection Agent (Compound Learning)
+    "reflection.start":           "🔍 正在进行经验复盘分析…",
+    "reflection.solution_saved":  "💡 已沉淀经验：{problem}",
+    "reflection.complete":        "📚 复盘完成，共沉淀 {saved} 条经验",
+
     # CE Orchestrator
     "ce.analyzing":               "📊 正在进行复盘分析…",
     "ce.complete":                "📊 复盘报告已生成",

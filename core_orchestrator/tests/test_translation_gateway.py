@@ -60,11 +60,11 @@ class TestCEOPlanEnglish:
     """CEO plan prompt must enforce English-only output."""
 
     def test_plan_prompt_contains_english_rule(self):
-        sample = _PLAN_SYSTEM.format(requirement="test", interview_log="none")
+        sample = _PLAN_SYSTEM.format(requirement="test", interview_log="none", solutions_context="")
         assert ENGLISH_KEYWORD in sample
 
     def test_plan_prompt_contains_iron_rule(self):
-        sample = _PLAN_SYSTEM.format(requirement="test", interview_log="none")
+        sample = _PLAN_SYSTEM.format(requirement="test", interview_log="none", solutions_context="")
         assert ENGLISH_RULE_MARKER in sample
 
     def test_plan_prompt_sent_to_llm(self, tmp_path):
@@ -99,11 +99,11 @@ class TestArchitectEnglish:
     """Architect prompt must enforce English-only output."""
 
     def test_solve_prompt_contains_english_rule(self):
-        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="", codebase_context="")
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="", codebase_context="", solutions_context="")
         assert ENGLISH_KEYWORD in sample
 
     def test_solve_prompt_contains_iron_rule(self):
-        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="", codebase_context="")
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="", codebase_context="", solutions_context="")
         assert ENGLISH_RULE_MARKER in sample
 
     def test_prompt_sent_to_llm_enforces_english(self, tmp_path):
@@ -122,12 +122,12 @@ class TestArchitectEnglish:
 
     def test_prompt_forbids_specification_only(self):
         """Architect prompt must forbid specification-only responses."""
-        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="", codebase_context="")
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="", codebase_context="", solutions_context="")
         assert "CODE PRODUCER" in sample or "REJECTED" in sample
 
     def test_prompt_requires_tool_use(self):
         """Architect prompt must require write_file tool use."""
-        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="", codebase_context="")
+        sample = _SOLVE_SYSTEM.format(plan_context="", task_content="test", knowledge_context="", feedback_context="", codebase_context="", solutions_context="")
         assert "write_file" in sample
 
 

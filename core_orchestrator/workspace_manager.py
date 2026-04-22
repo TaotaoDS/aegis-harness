@@ -29,6 +29,7 @@ DELIVERABLE_DIR = "deliverables"
 # Known internal directories (auto-routed in isolated mode)
 _INTERNAL_DIRS = frozenset({
     "tasks", "artifacts", "feedback", "escalations", "approved", "docs",
+    "solutions",   # workspace-scoped lessons learned (SolutionStore)
 })
 
 # Known internal root-level files

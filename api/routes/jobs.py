@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..event_bridge import AsyncQueueBus
 from ..hitl_manager import HITLManager
+from ..interview_manager import InterviewManager
 from ..job_runner import start_job
 from ..job_store import create_job, get_job, list_jobs, update_status
 from ..models import JobCreate, JobOut
@@ -29,13 +30,14 @@ async def create_and_start_job(body: JobCreate):
 
     loop = asyncio.get_event_loop()
 
-    # Wire up AsyncQueueBus and HITLManager before starting the thread
+    # Wire up AsyncQueueBus, HITLManager, and InterviewManager before starting
     job.bus = AsyncQueueBus(job_id=job.id, loop=loop)
     job.hitl_manager = HITLManager(
         job_id=job.id,
         bus=job.bus,
         on_status_change=update_status,
     )
+    job.interview_manager = InterviewManager(job_id=job.id, bus=job.bus)
 
     start_job(job, loop)
     return _to_out(job)
@@ -50,7 +52,8 @@ async def get_job_detail(job_id: str):
 
 
 def _to_out(job) -> JobOut:
-    pending = job.hitl_manager.pending_approval if job.hitl_manager else None
+    pending_approval  = job.hitl_manager.pending_approval if job.hitl_manager else None
+    pending_question  = job.interview_manager.pending_question if job.interview_manager else None
     return JobOut(
         id=job.id,
         type=job.type,
@@ -59,5 +62,6 @@ def _to_out(job) -> JobOut:
         status=job.status,
         created_at=job.created_at,
         event_count=len(job.bus.events_log) if job.bus else 0,
-        pending_approval=pending,
+        pending_approval=pending_approval,
+        pending_question=pending_question,
     )

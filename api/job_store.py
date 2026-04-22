@@ -11,7 +11,7 @@ class JobRecord:
 
     __slots__ = (
         "id", "type", "workspace_id", "requirement",
-        "status", "created_at", "bus", "hitl_manager",
+        "status", "created_at", "bus", "hitl_manager", "interview_manager",
     )
 
     def __init__(
@@ -27,8 +27,9 @@ class JobRecord:
         self.requirement = requirement
         self.status = "pending"
         self.created_at = datetime.now(timezone.utc).isoformat()
-        self.bus = None           # AsyncQueueBus, attached before start()
-        self.hitl_manager = None  # HITLManager, attached before start()
+        self.bus = None               # AsyncQueueBus, attached before start()
+        self.hitl_manager = None      # HITLManager, attached before start()
+        self.interview_manager = None # InterviewManager, attached before start()
 
 
 _store: Dict[str, JobRecord] = {}

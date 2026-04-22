@@ -57,6 +57,14 @@ export const EVENT_LABELS: Record<string, string> = {
   "hitl.approved":               "✅ 已批准，继续执行…",
   "hitl.rejected":               "⛔ 已拒绝，操作已取消",
 
+  // CEO interview confidence
+  "ceo.interview_complete":      "✅ 需求访谈完成",
+
+  // Reflection Agent (Compound Learning)
+  "reflection.start":            "🔍 正在进行经验复盘分析…",
+  "reflection.solution_saved":   "💡 经验已沉淀",
+  "reflection.complete":         "📚 复盘完成，经验已保存",
+
   // CE Orchestrator
   "ce.analyzing":                "📊 正在进行复盘分析…",
   "ce.complete":                 "📊 复盘报告已生成",
@@ -78,6 +86,15 @@ export const TERMINAL_EVENTS = new Set([
 
 /** Events that should trigger the HITL approval modal. */
 export const HITL_EVENTS = new Set(["hitl.approval_required"]);
+
+/** Events that should trigger the CEO interview input panel. */
+export const INTERVIEW_EVENTS = new Set(["ceo.question"]);
+
+/** Events that clear the interview panel (interview done or pipeline moved on). */
+export const INTERVIEW_DONE_EVENTS = new Set([
+  "ceo.interview_complete",
+  "ceo.planning",
+]);
 
 /** Events that deserve a rich "generative" card rather than a plain text row. */
 export const RICH_EVENTS = new Set([

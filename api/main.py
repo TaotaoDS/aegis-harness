@@ -10,11 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routes.jobs import router as jobs_router
 from .routes.stream import router as stream_router
 from .routes.approvals import router as approvals_router
+from .routes.interview import router as interview_router
 
 app = FastAPI(
     title="Enterprise Harness API",
     description="REST + SSE backend for the multi-agent orchestration harness",
-    version="0.8.0",
+    version="0.9.0",
 )
 
 # Allow Next.js dev server (port 3000) and production origin
@@ -29,6 +30,7 @@ app.add_middleware(
 app.include_router(jobs_router)
 app.include_router(stream_router)
 app.include_router(approvals_router)
+app.include_router(interview_router)
 
 
 @app.get("/healthz")

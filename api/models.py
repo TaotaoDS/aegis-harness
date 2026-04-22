@@ -10,6 +10,10 @@ class JobCreate(BaseModel):
     requirement: str
 
 
+class AnswerRequest(BaseModel):
+    answer: str
+
+
 class ApprovalRequest(BaseModel):
     approved: bool
     note: str = ""
@@ -24,3 +28,4 @@ class JobOut(BaseModel):
     created_at: str
     event_count: int = 0
     pending_approval: Optional[Dict[str, Any]] = None
+    pending_question: Optional[str] = None   # CEO interview: current unanswered question

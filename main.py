@@ -37,6 +37,8 @@ from core_orchestrator.ceo_agent import CEOAgent
 from core_orchestrator.resilience_manager import ResilienceManager
 from core_orchestrator.ce_orchestrator import CEOrchestrator
 from core_orchestrator.knowledge_manager import KnowledgeManager
+from core_orchestrator.solution_store import SolutionStore
+from core_orchestrator.reflection_agent import ReflectionAgent
 from core_orchestrator.event_bus import EventBus, NullBus, bus_from_workspace
 
 
@@ -122,17 +124,28 @@ def build_pipeline(
     return CEOAgent(gateway=gateway, workspace=ws, workspace_id=workspace_id)
 
 
-def run_interview_loop(ceo: CEOAgent, requirement: str) -> None:
-    """Drive the CEO through interview → plan → ready-to-delegate."""
+def run_interview_loop(
+    ceo: CEOAgent,
+    requirement: str,
+    solutions_context: str = "",
+) -> None:
+    """Drive the CEO through interview (95% confidence) → plan → delegate-ready.
+
+    In CLI mode the user types answers directly. The CEO's confidence score
+    is shown after each round so the user can see progress.
+    """
     question = ceo.start_interview(requirement)
 
     while question is not None:
-        print(f"\n[CEO] {question}")
-        answer = input("> ")
+        print(f"\n[CEO] Q: {question}")
+        answer = input("[You] > ")
         question = ceo.answer_question(answer)
+        conf = ceo.confidence
+        if conf > 0:
+            print(f"[CEO] Confidence: {conf}%")
 
-    print("\n[CEO] Interview complete. Generating plan...")
-    plan = ceo.create_plan()
+    print(f"\n[CEO] Interview complete (confidence: {ceo.confidence}%). Generating plan...")
+    plan = ceo.create_plan(solutions_context=solutions_context)
 
     task_count = len(plan.get("tasks", []))
     print(f"[CEO] Plan created with {task_count} task(s).")
@@ -162,6 +175,7 @@ def run_execution(
     tool_llm=None,
     escalated_tool_llm=None,
     bus=None,
+    solutions_context: str = "",
 ) -> Dict:
     """Run Architect + Evaluator + QA on all delegated tasks via ResilienceManager.
 
@@ -195,6 +209,7 @@ def run_execution(
         eval_timeout=exec_cfg.get("eval_timeout", 30),
         knowledge_manager=km,
         knowledge_context=knowledge_ctx,
+        solutions_context=solutions_context,
         bus=bus,
         escalated_tool_llm=_esc_tool_llm,
     )
@@ -217,7 +232,42 @@ def run_execution(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: CE Orchestrator — post-mortem knowledge capture
+# Phase 3a: Reflection Agent — workspace-scoped Compound Learning
+# ---------------------------------------------------------------------------
+
+def run_reflection(
+    *,
+    workspace: WorkspaceManager,
+    workspace_id: str,
+    requirement: str,
+    llm: Optional[Callable[[str], str]] = None,
+    bus=None,
+) -> int:
+    """Run ReflectionAgent on the current bus/event log to distil lessons.
+
+    Returns the number of solutions saved to workspaces/{ws_id}/solutions/.
+    """
+    sanitizer = default_pipeline()
+    _llm = llm or _load_default_llm()
+    gateway = LLMGateway(sanitizer=sanitizer, llm=_llm)
+
+    # Collect events from bus (EventBus stores them in .events list)
+    events_log: List[Dict] = []
+    if bus and hasattr(bus, "events"):
+        events_log = list(bus.events)
+
+    ra = ReflectionAgent(
+        gateway=gateway,
+        workspace=workspace,
+        workspace_id=workspace_id,
+    )
+    count = ra.reflect(events_log=events_log, requirement=requirement)
+    print(f"[Reflection] Distilled {count} lesson(s) → workspaces/{workspace_id}/solutions/")
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b: CE Orchestrator — post-mortem knowledge capture
 # ---------------------------------------------------------------------------
 
 def run_postmortem(
@@ -337,8 +387,14 @@ def run_update_mode(
     gateway = LLMGateway(sanitizer=sanitizer, llm=_llm)
     ceo = CEOAgent(gateway=gateway, workspace=workspace, workspace_id=workspace_id)
 
+    # Load workspace lessons for context injection
+    solution_store = SolutionStore(workspace, workspace_id)
+    solutions_ctx  = solution_store.format_as_context()
+    if solutions_ctx:
+        print(f"[Solutions] Loaded {solution_store.count()} lesson(s) from workspace.\n")
+
     print(f"\n[Update] Analyzing existing codebase and planning changes...")
-    plan = ceo.plan_update(requirement)
+    plan = ceo.plan_update(requirement, solutions_context=solutions_ctx)
 
     tasks = plan.get("tasks", [])
     if not tasks:
@@ -374,6 +430,7 @@ def run_update_mode(
         eval_timeout=exec_cfg.get("eval_timeout", 30),
         knowledge_manager=km,
         knowledge_context=knowledge_ctx,
+        solutions_context=solutions_ctx,
         bus=bus,
     )
 
@@ -510,11 +567,19 @@ def main() -> None:
             print("Error: requirement cannot be empty.")
             sys.exit(1)
 
-        run_interview_loop(ceo, requirement)
+        # Load workspace solutions for CEO planning (Compound Learning)
+        solution_store = SolutionStore(ws, ws_id)
+        solutions_ctx  = solution_store.format_as_context()
+        if solutions_ctx:
+            print(f"[Solutions] Loaded {solution_store.count()} lesson(s) from workspace.\n")
+
+        run_interview_loop(ceo, requirement, solutions_context=solutions_ctx)
         save_checkpoint(ws, ws_id, stage="interviewed", requirement=requirement)
         print("[Checkpoint] Saved: interviewed\n")
     else:
         print("[Skip] Interview + plan already done.")
+        solution_store = SolutionStore(ws, ws_id)
+        solutions_ctx  = solution_store.format_as_context()
 
     # ------------------------------------------------------------------
     # Phase 1b: Delegate tasks
@@ -543,7 +608,12 @@ def main() -> None:
     # Phase 2: Architect + QA via ResilienceManager
     # ------------------------------------------------------------------
     if not _stage_done(checkpoint, "executed"):
-        status = run_execution(workspace=ws, workspace_id=ws_id, bus=bus)
+        status = run_execution(
+            workspace=ws,
+            workspace_id=ws_id,
+            bus=bus,
+            solutions_context=solutions_ctx,
+        )
         save_checkpoint(ws, ws_id, stage="executed",
                         requirement=requirement, execution_status=status)
         print("[Checkpoint] Saved: executed\n")
@@ -552,7 +622,17 @@ def main() -> None:
         status = checkpoint.get("execution_status", {})
 
     # ------------------------------------------------------------------
-    # Phase 3: CE Orchestrator post-mortem
+    # Phase 3a: Reflection Agent — Compound Learning (always runs)
+    # ------------------------------------------------------------------
+    run_reflection(
+        workspace=ws,
+        workspace_id=ws_id,
+        requirement=requirement,
+        bus=bus,
+    )
+
+    # ------------------------------------------------------------------
+    # Phase 3b: CE Orchestrator post-mortem
     # ------------------------------------------------------------------
     if not _stage_done(checkpoint, "postmortem"):
         run_postmortem(workspace=ws, workspace_id=ws_id)

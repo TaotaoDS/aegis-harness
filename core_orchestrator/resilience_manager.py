@@ -52,6 +52,7 @@ class ResilienceManager:
         eval_timeout: int = _DEFAULT_EVAL_TIMEOUT,
         knowledge_manager: Optional[KnowledgeManager] = None,
         knowledge_context: str = "",
+        solutions_context: str = "",
         bus=None,
         escalated_tool_llm: Optional[ToolLLM] = None,
         hitl_manager=None,
@@ -68,6 +69,7 @@ class ResilienceManager:
         self._eval_timeout = eval_timeout
         self._knowledge_manager = knowledge_manager
         self._knowledge_context = knowledge_context
+        self._solutions_context = solutions_context  # workspace lessons forwarded to Architect
         self._bus = bus or NullBus()
         self._hitl_manager = hitl_manager   # Optional HITLManager forwarded to ArchitectAgent
         self._token_usage = 0
@@ -172,6 +174,7 @@ class ResilienceManager:
                 workspace=self._workspace,
                 workspace_id=self._ws_id,
                 knowledge_context=self._knowledge_context,
+                solutions_context=self._solutions_context,
                 bus=self._bus,
                 hitl_manager=self._hitl_manager,
             )

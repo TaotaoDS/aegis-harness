@@ -86,6 +86,8 @@ You are a senior software architect who writes production code.
 {knowledge_context}
 {plan_context}
 
+{solutions_context}
+
 ## TOOL USE -- MANDATORY
 
 You have access to a `write_file` tool. You MUST use it to submit every code file.
@@ -136,6 +138,7 @@ class ArchitectAgent:
         workspace: WorkspaceManager,
         workspace_id: str,
         knowledge_context: str = "",
+        solutions_context: str = "",
         bus=None,
         hitl_manager=None,
     ):
@@ -144,6 +147,7 @@ class ArchitectAgent:
         self._workspace = workspace
         self._ws_id = workspace_id
         self._knowledge_context = knowledge_context
+        self._solutions_context = solutions_context  # workspace lessons (SolutionStore)
         self._bus = bus or NullBus()
         self._hitl_manager = hitl_manager   # Optional HITLManager for sensitive-file gates
 
@@ -307,6 +311,7 @@ class ArchitectAgent:
             knowledge_context=knowledge_context,
             feedback_context=feedback_context,
             codebase_context=codebase_context,
+            solutions_context=self._solutions_context or "",
         )
 
         # Select tools: always write_file; add read_file when codebase exists
