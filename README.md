@@ -2,6 +2,8 @@
 
 Enterprise-grade multi-agent orchestration harness. A CEO agent interviews you to clarify requirements, decomposes work into tasks, and delegates to Architect, QA, Resilience Manager, and CE Orchestrator agents via a shared file-based workspace.
 
+Supports **greenfield builds** and **incremental updates** to existing projects.
+
 ## Architecture
 
 ```
@@ -16,8 +18,8 @@ main.py  ──>  CEO Agent (reverse interview + plan + delegate)
         ┌───────┼───────────────┐
         v       v               v
    Architect  Evaluator    Resilience Manager
-   (===FILE   (sandbox     (3-layer escalation
-    blocks)    verify)      + knowledge capture)
+  (Tool Use   (sandbox     (3-layer escalation
+  write_file)  verify)      + knowledge capture)
         │       │               │
         └── QA ─┘               v
           (review)        Knowledge Manager
@@ -37,29 +39,38 @@ Agent → LLMGateway(llm=Callable) → ModelRouter.as_llm() → LLMConnector.cal
                                                                  |
                                           ┌──────────────────────┼──────────────────┐
                                           v                      v                  v
-                                   OpenAIConnector       AnthropicConnector    (your custom)
-                                   (OpenAI, DeepSeek,    (Claude)              register_connector()
-                                    Zhipu, Kimi, Ollama,
-                                    vLLM, etc.)
+                                   OpenAIConnector       AnthropicConnector    (custom)
+                                   (OpenAI, NVIDIA NIM,  (Claude)              register_connector()
+                                    DeepSeek, Zhipu,
+                                    Kimi, Ollama, vLLM…)
 ```
 
-Any provider with an OpenAI-compatible API works out of the box — just set `base_url_env` in config.
+Any provider with an OpenAI-compatible API works out of the box. Two config patterns:
+
+| Pattern | YAML example | When to use |
+|---------|-------------|-------------|
+| **A** — env-var indirection | `api_key_env: NVIDIA_API_KEY` | Keeps key names explicit |
+| **B** — `${VAR}` interpolation | `api_key: ${NVIDIA_API_KEY}` | Cleaner for third-party endpoints |
+
+Both patterns can be freely mixed within the same `models_config.yaml`.
 
 ### Agent Pipeline
 
 | Agent | Role |
 |-------|------|
-| **CEO** | Reverse-interviews the user, generates a plan, delegates tasks. Acts as a translation gateway: communicates in the user's language but produces English-only internal artifacts. |
-| **Architect** | Code producer. Outputs `===FILE: path===` blocks; agent parses them and writes physical files to `src/`. Reads knowledge base before each task. |
+| **CEO** | Reverse-interviews the user, generates a plan, delegates tasks. Communicates in the user's language; produces English-only internal artifacts. In Update Mode, reads existing deliverables and generates targeted modification tasks instead of rebuilding from scratch. |
+| **Architect** | Code producer. Uses native **Tool Use (Function Calling)** — the LLM calls `write_file(filepath, content)` to write files. In Update Mode also gets `read_file` to inspect existing code before modifying it. |
 | **Evaluator** | Sandbox verifier. Runs between Architect and QA: validates file existence, Python/JS syntax, HTML structure. Failures feed back to Architect. |
-| **QA** | Binary verdict reviewer. Pass -> `approved/`, Fail -> `feedback/`. Never modifies code. |
-| **Resilience Manager** | Wraps Architect → Evaluator → QA loop with 3-layer escalation and knowledge capture. Reads `max_retries` from config. |
+| **QA** | Binary verdict reviewer. Pass → `approved/`, Fail → `feedback/`. Never modifies code. |
+| **Resilience Manager** | Wraps Architect → Evaluator → QA loop with 3-layer escalation and knowledge capture. |
 | **Knowledge Manager** | Compound learning. Auto-captures bug/fix/guide after retries; injects lessons into future Architect prompts. |
 | **CE Orchestrator** | Post-mortem analysis engine. Runs 5 independent sub-agents and writes structured post-mortem docs. |
 
 ### Key Design Decisions
 
-- **Model-agnostic**: `LLMConnector` Protocol decouples agents from providers. OpenAI-compatible APIs (DeepSeek, Zhipu, Kimi, Ollama, vLLM) work via `base_url_env`. Extensible via `register_connector()`.
+- **Tool Use (Function Calling)**: Architect uses native LLM tool invocation instead of brittle regex text parsing. `write_file` / `read_file` are registered as first-class tools.
+- **Model-agnostic**: `LLMConnector` Protocol decouples agents from providers. OpenAI-compatible APIs work via `base_url` or `base_url_env`; extensible via `register_connector()`.
+- **`${VAR}` YAML interpolation**: Environment variable placeholders in `models_config.yaml` are resolved at startup, making third-party API configs readable and self-documenting.
 - **English-only internals**: All workspace artifacts are strictly English to save tokens and improve model reasoning.
 - **PII sanitization**: All user input passes through a regex-based sanitizer before reaching any LLM.
 - **Token overflow management**: 2-stage compression prevents infinite context growth.
@@ -67,18 +78,19 @@ Any provider with an OpenAI-compatible API works out of the box — just set `ba
 
 ## Quick Start
 
-Three steps to run:
-
 ```bash
 # 1. Install dependencies
-pip install tiktoken pyyaml python-dotenv openai anthropic
+pip install -r requirements.txt
 
 # 2. Configure API keys
 cp .env.example .env
-# Edit .env — fill in your API keys (see below)
+# Edit .env — fill in your API keys (see Configuration below)
 
-# 3. Run
+# 3. Build a new project
 python main.py
+
+# 4. Update an existing project (Update Mode)
+python main.py --workspace my_project -u "Fix the login button color to blue"
 ```
 
 ## Configuration
@@ -89,84 +101,85 @@ python main.py
 cp .env.example .env
 ```
 
-Open `.env` and fill in your keys. At minimum, you need **one** of the following:
+Open `.env` and fill in at least **one** provider key:
 
 ```env
-# Option A: Use Anthropic (default model)
-ANTHROPIC_API_KEY=sk-ant-your-key-here
+# Option A: Anthropic (Claude)
+ANTHROPIC_API_KEY=sk-ant-your-key
 
-# Option B: Use OpenAI
-OPENAI_API_KEY=sk-your-key-here
+# Option B: OpenAI
+OPENAI_API_KEY=sk-your-key
 
-# Option C: Use a free/open-source model (DeepSeek, Zhipu, Kimi, etc.)
-# These use OpenAI-compatible APIs — just set the key and URL:
-DEEPSEEK_API_KEY=sk-your-deepseek-key
+# Option C: NVIDIA NIM (free 1000-call quota, hundreds of open-source models)
+NVIDIA_API_KEY=nvapi-your-key
+
+# Option D: DeepSeek, Zhipu, Kimi, Ollama, vLLM — any OpenAI-compatible endpoint
+DEEPSEEK_API_KEY=sk-your-key
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 ```
 
-**Important**: Never commit `.env` to version control. It is already in `.gitignore`.
+**Important**: Never commit `.env` to version control (already in `.gitignore`).
 
-### 2. Model routing
+### 2. Model routing (`models_config.yaml`)
 
-The model configuration is in project root `models_config.yaml`:
+The config file supports **two equivalent patterns** for specifying API credentials:
 
+**Pattern A — env-var name indirection (original):**
 ```yaml
 models:
   claude-sonnet:
-    provider: anthropic                    # or "openai" for OpenAI-compatible
+    provider: anthropic
     model_id: claude-sonnet-4-20250514
-    api_key_env: ANTHROPIC_API_KEY         # env var name, never the actual key
-    max_tokens: 4096
-    tier: standard
-    # temperature: 0.7                     # optional, default 0.7
-    # base_url_env: CUSTOM_BASE_URL        # optional, for custom endpoints
+    api_key_env: ANTHROPIC_API_KEY       # stores the env var *name*
+    max_tokens: 8192
+```
 
+**Pattern B — `${VAR}` inline interpolation (recommended for third-party APIs):**
+```yaml
+models:
+  nvidia-llama:
+    provider: openai                     # OpenAI-compatible endpoint
+    model_id: meta/llama-3.3-70b-instruct
+    api_key: ${NVIDIA_API_KEY}           # resolved from .env at startup
+    base_url: https://integrate.api.nvidia.com/v1
+    max_tokens: 4096
+    temperature: 0.2
+```
+
+Route configuration:
+```yaml
 routes:
   - match: { customer: "enterprise", task: "reasoning" }
-    model: claude-opus
-  - match: {}                              # fallback
+    model: nvidia-llama
+  - match: {}                            # fallback (required)
     model: claude-sonnet
 ```
 
-Default routes:
+### 3. Adding NVIDIA NIM
 
-| Context | Model |
-|---------|-------|
-| enterprise + reasoning | claude-opus |
-| enterprise | claude-sonnet |
-| reasoning | gpt-4o |
-| fallback (any) | claude-sonnet |
-
-### 3. Adding a new provider (e.g., DeepSeek)
-
-1. Uncomment the model block in project root `models_config.yaml`:
-   ```yaml
-   deepseek-chat:
-     provider: openai           # OpenAI-compatible API
-     model_id: deepseek-chat
-     api_key_env: DEEPSEEK_API_KEY
-     base_url_env: DEEPSEEK_BASE_URL
-     max_tokens: 4096
-     temperature: 0.3
-     tier: standard
-   ```
-
-2. Add the env vars to `.env`:
+1. Get a free API key at [build.nvidia.com](https://build.nvidia.com) (1000 free calls)
+2. Add to `.env`:
    ```env
-   DEEPSEEK_API_KEY=sk-your-key
-   DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+   NVIDIA_API_KEY=nvapi-your-key
    ```
+3. Uncomment the `nvidia-llama` block in `models_config.yaml` (Pattern B)
+4. Add a route pointing to it
 
-3. Update a route to use it:
-   ```yaml
-   routes:
-     - match: {}
-       model: deepseek-chat
-   ```
+NVIDIA NIM hosts hundreds of models (Llama, Mistral, Mixtral, Qwen, etc.) — change `model_id` to any model listed on their catalog.
 
-The same pattern works for Zhipu (GLM), Kimi (Moonshot), Ollama, vLLM, or any OpenAI-compatible endpoint.
+### 4. Adding any other OpenAI-compatible provider
 
-### 4. Adding a non-OpenAI-compatible provider (e.g., Gemini)
+Same as NVIDIA — just set the `base_url` to the provider's endpoint:
+
+| Provider | `base_url` |
+|----------|-----------|
+| DeepSeek | `https://api.deepseek.com/v1` |
+| Zhipu/GLM | `https://open.bigmodel.cn/api/paas/v4` |
+| Kimi/Moonshot | `https://api.moonshot.cn/v1` |
+| Ollama (local) | `http://localhost:11434/v1` |
+| vLLM (local) | `http://localhost:8000/v1` |
+
+### 5. Adding a non-OpenAI-compatible provider (e.g., Gemini)
 
 ```python
 from core_orchestrator import register_connector
@@ -176,34 +189,53 @@ class GeminiConnector:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_id)
-        resp = model.generate_content(text)
-        return resp.text
+        return model.generate_content(text).text
 
 register_connector("gemini", GeminiConnector())
 ```
 
-Then add `provider: gemini` in your YAML config.
+Then add `provider: gemini` in `models_config.yaml`.
 
 ## Usage
 
-### Run the CLI
+### Greenfield build (new project)
 
 ```bash
 python main.py
+python main.py --workspace my_project   # custom workspace ID
+python main.py --reset                  # discard checkpoint, start fresh
 ```
 
-With a custom workspace:
+**What happens:**
+1. Enter your requirement (any language — Chinese, English, etc.)
+2. CEO asks clarifying questions
+3. CEO generates an English-only plan and delegates tasks to `tasks/`
+4. Architect uses Tool Use to write code files to `deliverables/`
+5. Evaluator validates syntax; QA reviews; failures loop back with feedback
+6. CE Orchestrator writes post-mortem docs to `docs/solutions/`
+
+### Update Mode (iterate on existing project)
 
 ```bash
-python main.py --workspace my_project
+python main.py --workspace my_project --update "Fix the submit button color to blue"
+python main.py -w my_project -u "Add dark mode support"
 ```
 
-### What happens
+**What happens:**
+1. CEO reads `deliverables/` and generates 1–5 targeted modification tasks
+2. Architect reads existing files via `read_file`, then calls `write_file` for surgical changes
+3. Only the new tasks are executed — existing approved work is untouched
 
-1. You enter a requirement in your native language (Chinese, English, etc.)
-2. The CEO agent asks clarifying questions (in your language)
-3. Once satisfied, the CEO generates an English-only plan
-4. Tasks are delegated to individual files in `workspaces/<id>/tasks/`
+### Checkpoint / Resume
+
+The pipeline saves progress after each stage to `workspaces/<id>/checkpoint.json`. Re-run to resume:
+
+```bash
+python main.py                  # resumes automatically
+python main.py --reset          # discard checkpoint, start fresh
+```
+
+Stages: `interviewed → delegated → executed → postmortem`
 
 ### Example session
 
@@ -219,10 +251,7 @@ Enter your requirement (what do you want to build?):
 > Build a REST API for user management with OAuth2 authentication
 
 [CEO] What are the expected user roles and permission levels?
-> Admin and regular users. Admin can manage all users, regular users can only update their own profile.
-
-[CEO] What database do you plan to use?
-> PostgreSQL
+> Admin and regular users. Admins manage all users; users update their own profile.
 
 [CEO] Interview complete. Generating plan...
 [CEO] Plan created with 4 task(s).
@@ -231,78 +260,81 @@ Enter your requirement (what do you want to build?):
   - [high] task_3: Build REST endpoints
   - [medium] task_4: Write integration tests
 
-Delegating tasks to workspace...
-[CEO] Delegated 4 task file(s):
-  -> tasks/task_1.md
-  -> tasks/task_2.md
-  -> tasks/task_3.md
-  -> tasks/task_4.md
-
-Done. Task files written to workspaces/default/tasks/
+[Execution] Running Architect + Evaluator + QA pipeline...
+  [PASS] task_1 (attempts: 1) -> artifacts/task_1_solution.md
+  [PASS] task_2 (attempts: 2) -> artifacts/task_2_solution.md
+  ...
 ```
 
-## Checkpoint / Resume
-
-The pipeline saves progress after each stage to `workspaces/<id>/checkpoint.json`.
-If interrupted, re-run the same command to resume from where you left off:
-
-```bash
-python main.py                  # resumes automatically
-python main.py --reset          # discard checkpoint, start fresh
 ```
+$ python main.py -u "Add rate limiting to the login endpoint"
 
-Stages: `interviewed → delegated → executed → postmortem`
+[Update Mode] Requirement: Add rate limiting to the login endpoint
+
+[Update] Analyzing existing codebase and planning changes...
+[Update] Generated 1 update task(s):
+  - [high] task_5: Add rate limiting (files: auth.py, config.py)
+
+[Execution] Running Architect + Evaluator + QA on 1 update task(s)...
+  [PASS] task_5 (attempts: 1) -> artifacts/task_5_solution.md
+```
 
 ## Running Tests
 
 ```bash
-# Full test suite (no API keys needed)
-python -m pytest core_orchestrator/tests/ -v
+# Full test suite (no API keys needed — all mocked)
+python3 -m pytest core_orchestrator/tests/ -v
 
 # Individual modules
-python -m pytest core_orchestrator/tests/test_llm_connector.py -v
-python -m pytest core_orchestrator/tests/test_model_router.py -v
-python -m pytest core_orchestrator/tests/test_main.py -v
+python3 -m pytest core_orchestrator/tests/test_model_router.py -v    # routing + interpolation
+python3 -m pytest core_orchestrator/tests/test_architect_agent.py -v # Tool Use protocol
+python3 -m pytest core_orchestrator/tests/test_update_mode.py -v     # Update Mode
+python3 -m pytest core_orchestrator/tests/test_main.py -v            # CLI pipeline
 ```
 
-All tests use mock LLMs and require no API keys or network access.
+All 428 tests use mock LLMs and require no API keys or network access.
 
 ## Project Structure
 
 ```
 enterprise-harness/
-├── main.py                              # CLI entry point
+├── main.py                              # CLI entry point (--update / -u flag)
 ├── models_config.yaml                   # Model & route definitions (edit this!)
-├── .env.example                         # API key + URL template (with comments)
-├── AGENTS.md                            # Orchestrator rules (read-only)
+├── requirements.txt                     # Python dependencies
+├── .env.example                         # API key + URL template (copy to .env)
+├── CHANGELOG.md                         # Version history
 ├── README.md                            # This file
 ├── core_orchestrator/
 │   ├── __init__.py                      # Public API exports
-│   ├── llm_connector.py                 # LLMConnector Protocol + providers
+│   ├── llm_connector.py                 # LLMConnector Protocol + OpenAI/Anthropic
 │   ├── pii_sanitizer.py                 # PII regex sanitizer middleware
-│   ├── llm_gateway.py                   # LLM gateway + token overflow
-│   ├── model_router.py                  # YAML config + route matching
+│   ├── llm_gateway.py                   # LLM gateway + token overflow management
+│   ├── model_router.py                  # YAML config + ${VAR} interpolation + routing
 │   ├── workspace_manager.py             # File-based shared workspace
-│   ├── ceo_agent.py                     # CEO orchestrator (state machine)
-│   ├── architect_agent.py               # Architect (file-block code producer)
+│   ├── ceo_agent.py                     # CEO state machine (build + update modes)
+│   ├── architect_agent.py               # Architect — Tool Use write_file/read_file
 │   ├── evaluator.py                     # Sandbox verifier (syntax + execution)
-│   ├── knowledge_manager.py             # Global knowledge base (compound learning)
+│   ├── knowledge_manager.py             # Compound learning (global knowledge base)
 │   ├── qa_agent.py                      # QA evaluator (binary verdict)
 │   ├── resilience_manager.py            # 3-layer escalation + evaluator + knowledge
 │   ├── ce_orchestrator.py               # Post-mortem analysis (5 sub-agents)
-│   └── tests/                           # 327 tests, all mock-based
-│       ├── test_llm_connector.py        # 16 tests
-│       ├── test_model_router.py         # 30 tests
-│       ├── test_pii_sanitizer.py        # 30 tests
-│       ├── test_llm_gateway.py          # 30 tests
-│       ├── test_workspace_manager.py    # 30 tests
-│       ├── test_ceo_agent.py            # 21 tests
-│       ├── test_architect_agent.py      # 15 tests
-│       ├── test_qa_agent.py             # 17 tests
-│       ├── test_resilience_manager.py   # 15 tests
-│       ├── test_ce_orchestrator.py      # 18 tests
-│       ├── test_translation_gateway.py  # 16 tests
-│       └── test_main.py                 #  7 tests
+│   └── tests/                           # 428 tests, all mock-based
+│       ├── test_llm_connector.py
+│       ├── test_model_router.py         # incl. ${VAR} interpolation + NVIDIA NIM
+│       ├── test_pii_sanitizer.py
+│       ├── test_llm_gateway.py
+│       ├── test_workspace_manager.py
+│       ├── test_ceo_agent.py
+│       ├── test_architect_agent.py      # Tool Use protocol
+│       ├── test_update_mode.py          # Update Mode (CEO + Architect + CLI)
+│       ├── test_qa_agent.py
+│       ├── test_resilience_manager.py
+│       ├── test_ce_orchestrator.py
+│       ├── test_translation_gateway.py
+│       ├── test_main.py
+│       ├── test_checkpoint.py
+│       ├── test_event_bus.py
+│       └── test_json_parser.py
 ├── knowledge_base/                      # Design decision docs
 └── workspaces/                          # Runtime workspace (gitignored)
 ```
