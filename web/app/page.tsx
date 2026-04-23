@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 
@@ -15,8 +16,38 @@ interface Job {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // ── Onboarding check ───────────────────────────────────────────────────
+  // If the user has never configured API keys (and hasn't skipped onboarding),
+  // redirect to the setup wizard on first load.
+  useEffect(() => {
+    (async () => {
+      try {
+        const [keysRes, onboardedRes] = await Promise.all([
+          fetch("/api/proxy/settings/api_keys"),
+          fetch("/api/proxy/settings/onboarded"),
+        ]);
+        const keysData = keysRes.ok ? await keysRes.json() : null;
+        const onboardedData = onboardedRes.ok ? await onboardedRes.json() : null;
+
+        const hasKeys =
+          keysData?.value &&
+          typeof keysData.value === "object" &&
+          Object.keys(keysData.value).length > 0;
+        const alreadyOnboarded = onboardedData?.value === true;
+
+        if (!hasKeys && !alreadyOnboarded) {
+          router.replace("/onboarding");
+        }
+      } catch {
+        // Backend not reachable — stay on dashboard, don't redirect
+      }
+    })();
+  }, [router]);
+  // ────────────────────────────────────────────────────────────────────────
 
   const fetchJobs = async () => {
     try {
