@@ -156,7 +156,7 @@ curl -X POST http://localhost:8000/mcp/servers \
 curl -X POST http://localhost:8000/mcp/servers/{id}/probe
 ```
 
-Or use **Settings → 🔧 MCP 工具** in the web console. Registrations persist across restarts.
+Or use **Settings → 🔧 MCP Tool** in the web console. Registrations persist across restarts.
 
 ### 5. 3-Layer Resilience + Exponential Backoff
 
