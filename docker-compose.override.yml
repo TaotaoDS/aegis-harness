@@ -1,0 +1,39 @@
+# =============================================================================
+# docker-compose.override.yml — Local development overrides
+# =============================================================================
+# This file is loaded automatically by `docker compose up` alongside the main
+# docker-compose.yml.  It mounts source code for hot-reload so you can edit
+# Python files without rebuilding the image.
+#
+# For production deployments, do NOT include this file:
+#   docker compose -f docker-compose.yml up
+# =============================================================================
+
+services:
+
+  backend:
+    # Mount source for hot-reload (uvicorn --reload picks up file changes)
+    volumes:
+      - .:/app
+      - workspaces:/app/workspaces   # keep named volume for generated files
+    command:
+      - uvicorn
+      - api.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload         # ← hot-reload on source changes
+      - --reload-dir
+      - /app/api
+      - --reload-dir
+      - /app/core_orchestrator
+      - --reload-dir
+      - /app/db
+
+  frontend:
+    # For frontend dev, run `cd web && npm run dev` on the host directly.
+    # Docker is mainly used for the full-stack production simulation.
+    build:
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000

@@ -6,10 +6,15 @@ Bridges the synchronous, blocking pipeline with FastAPI's async event loop:
   - HITLManager uses threading.Event to block the pipeline until human approves
   - InterviewManager uses threading.Event to block the pipeline for CEO questions
 
-New in v0.9.0:
+v0.9.0:
   - CEO interview uses InterviewManager (real user answers, not auto-answer)
   - SolutionStore injects workspace lessons into CEO planning and Architect coding
   - ReflectionAgent runs after every pipeline (success or failure) to distil lessons
+
+v1.0.0:
+  - Checkpoint writes at every major phase boundary (file system + optional DB).
+    Checkpoints survive process crashes and enable future pipeline resumption.
+    Written via WorkspaceManager.save_checkpoint() — never blocks the pipeline.
 """
 
 import asyncio
@@ -25,6 +30,90 @@ from .job_store import JobRecord, update_status
 
 _HARNESS_ROOT = Path(__file__).parent.parent
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="harness-job")
+
+
+# ---------------------------------------------------------------------------
+# DB helpers (fire-and-forget, never block the pipeline)
+# ---------------------------------------------------------------------------
+
+def _db_mirror_status(
+    loop: asyncio.AbstractEventLoop,
+    job_id: str,
+    status: str,
+) -> None:
+    """Schedule an async DB status update from a background thread."""
+    async def _write() -> None:
+        try:
+            from db.connection import get_session, is_db_available
+            from db.repository import update_job_status
+            if not is_db_available():
+                return
+            async with get_session() as session:
+                await update_job_status(session, job_id, status)
+        except Exception:   # noqa: BLE001
+            pass
+    try:
+        asyncio.run_coroutine_threadsafe(_write(), loop)
+    except RuntimeError:
+        pass
+
+
+def _db_mirror_checkpoint(
+    loop: asyncio.AbstractEventLoop,
+    job_id: str,
+    phase: str,
+    completed_tasks: Optional[List[str]] = None,
+    data: Optional[dict] = None,
+) -> None:
+    """Schedule an async DB checkpoint upsert from a background thread."""
+    async def _write() -> None:
+        try:
+            from db.connection import get_session, is_db_available
+            from db.repository import save_checkpoint
+            if not is_db_available():
+                return
+            async with get_session() as session:
+                await save_checkpoint(
+                    session,
+                    job_id=job_id,
+                    phase=phase,
+                    completed_tasks=completed_tasks or [],
+                    data=data or {},
+                )
+        except Exception:   # noqa: BLE001
+            pass
+    try:
+        asyncio.run_coroutine_threadsafe(_write(), loop)
+    except RuntimeError:
+        pass
+
+
+def _write_checkpoint(
+    ws,
+    ws_id: str,
+    loop: asyncio.AbstractEventLoop,
+    job_id: str,
+    phase: str,
+    completed_tasks: Optional[List[str]] = None,
+    extra: Optional[dict] = None,
+) -> None:
+    """Write a checkpoint to the filesystem (always) and DB (if available).
+
+    Never raises — checkpoint failures must not affect the pipeline.
+    """
+    from datetime import datetime, timezone
+    data = {
+        "job_id":           job_id,
+        "phase":            phase,
+        "completed_tasks":  completed_tasks or [],
+        "updated_at":       datetime.now(timezone.utc).isoformat(),
+        **(extra or {}),
+    }
+    try:
+        ws.save_checkpoint(ws_id, data)
+    except Exception:   # noqa: BLE001
+        pass
+    _db_mirror_checkpoint(loop, job_id, phase, completed_tasks, data)
 
 
 # ---------------------------------------------------------------------------
@@ -72,27 +161,46 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
             ws.create(ws_id)
 
         update_status(job.id, "running")
+        _db_mirror_status(loop, job.id, "running")
         bus.emit("pipeline.start", workspace=ws_id, job_type=job.type)
+
+        # ── Checkpoint: pipeline started ─────────────────────────────────
+        _write_checkpoint(ws, ws_id, loop, job.id, "started")
 
         # ── Run ──────────────────────────────────────────────────────────
         if job.type == "update":
             _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl,
-                        sanitizer, router)
+                        sanitizer, router, loop=loop)
         else:
             _run_build(job, ws, ws_id, gateway, tool_llm, bus,
-                       sanitizer, router)
+                       sanitizer, router, loop=loop)
 
         update_status(job.id, "completed")
+        _db_mirror_status(loop, job.id, "completed")
         bus.emit("pipeline.complete", workspace=ws_id)
+
+        # ── Checkpoint: pipeline completed ───────────────────────────────
+        _write_checkpoint(ws, ws_id, loop, job.id, "completed")
 
     except _RejectedError as e:
         update_status(job.id, "rejected")
+        _db_mirror_status(loop, job.id, "rejected")
         bus.emit("pipeline.rejected", reason=str(e))
+        try:
+            _write_checkpoint(ws, ws_id, loop, job.id, "rejected")  # type: ignore[possibly-unbound]
+        except Exception:
+            pass
 
     except Exception as e:
         update_status(job.id, "failed")
+        _db_mirror_status(loop, job.id, "failed")
         bus.emit("pipeline.error", error=str(e),
                  detail=traceback.format_exc()[:800])
+        try:
+            _write_checkpoint(ws, ws_id, loop, job.id, "failed",  # type: ignore[possibly-unbound]
+                              extra={"error": str(e)})
+        except Exception:
+            pass
 
     finally:
         # ── Reflection (always runs — failures are most educational) ────
@@ -106,18 +214,30 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
 # Build pipeline (greenfield)
 # ---------------------------------------------------------------------------
 
-def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router):
+def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router, *, loop):
     from core_orchestrator.ceo_agent import CEOAgent
     from core_orchestrator.solution_store import SolutionStore
 
     # ── Load workspace solutions (Compound Learning injection) ───────────
     solutions_ctx = SolutionStore(ws, ws_id).format_as_context()
 
-    ceo           = CEOAgent(gateway=gateway, workspace=ws, workspace_id=ws_id)
+    # ── Resolve user profile ──────────────────────────────────────────────
+    user_profile = None
+    if job.user_profile:
+        from core_orchestrator.user_profile import UserProfile
+        try:
+            user_profile = UserProfile.from_dict(job.user_profile)
+        except Exception:   # noqa: BLE001
+            pass   # invalid profile data → fall back to default behaviour
+
+    ceo           = CEOAgent(gateway=gateway, workspace=ws, workspace_id=ws_id,
+                             user_profile=user_profile)
     interview_mgr = job.interview_manager   # InterviewManager | None
 
     # ── CEO interview (95% confidence loop) ─────────────────────────────
     bus.emit("ceo.interviewing")
+    _write_checkpoint(ws, ws_id, loop, job.id, "interviewing")
+
     question = ceo.start_interview(job.requirement)
 
     while question is not None:
@@ -133,6 +253,9 @@ def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router):
         question = ceo.answer_question(answer)
 
     bus.emit("ceo.interview_complete", confidence=ceo.confidence)
+    # ── Checkpoint: interview done ────────────────────────────────────
+    _write_checkpoint(ws, ws_id, loop, job.id, "interview_complete",
+                      extra={"confidence": ceo.confidence})
 
     # ── CEO planning (with lessons injected) ────────────────────────────
     bus.emit("ceo.planning")
@@ -144,15 +267,22 @@ def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router):
     ceo.delegate()
     bus.emit("ceo.delegated", task_count=len(tasks))
 
+    # ── Checkpoint: planning done, about to execute ───────────────────
+    task_ids = [t["id"] for t in tasks]
+    _write_checkpoint(ws, ws_id, loop, job.id, "executing",
+                      completed_tasks=[],
+                      extra={"total_tasks": len(tasks), "task_ids": task_ids})
+
     _run_execution(job, ws, ws_id, tool_llm, bus, sanitizer, router,
-                   hitl=job.hitl_manager, solutions_ctx=solutions_ctx)
+                   hitl=job.hitl_manager, solutions_ctx=solutions_ctx,
+                   loop=loop)
 
 
 # ---------------------------------------------------------------------------
 # Update pipeline (incremental)
 # ---------------------------------------------------------------------------
 
-def _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl, sanitizer, router):
+def _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl, sanitizer, router, *, loop):
     from core_orchestrator.ceo_agent import CEOAgent
     from core_orchestrator.solution_store import SolutionStore
 
@@ -161,6 +291,8 @@ def _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl, sanitizer, router)
     ceo = CEOAgent(gateway=gateway, workspace=ws, workspace_id=ws_id)
 
     bus.emit("pipeline.update_start", workspace=ws_id)
+    _write_checkpoint(ws, ws_id, loop, job.id, "update_planning")
+
     plan  = ceo.plan_update(job.requirement, solutions_context=solutions_ctx)
     tasks = plan.get("tasks", [])
 
@@ -179,10 +311,16 @@ def _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl, sanitizer, router)
     ceo.delegate()
     bus.emit("ceo.delegated", task_count=len(tasks))
 
+    task_ids = [t["id"] for t in tasks]
+    _write_checkpoint(ws, ws_id, loop, job.id, "update_executing",
+                      completed_tasks=[],
+                      extra={"task_ids": task_ids})
+
     _run_execution(job, ws, ws_id, tool_llm, bus, sanitizer, router,
-                   task_ids=[t["id"] for t in tasks],
+                   task_ids=task_ids,
                    hitl=hitl,
-                   solutions_ctx=solutions_ctx)
+                   solutions_ctx=solutions_ctx,
+                   loop=loop)
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +332,7 @@ def _run_execution(
     task_ids: Optional[List[str]] = None,
     hitl: Optional[HITLManager] = None,
     solutions_ctx: str = "",
+    loop: Optional[asyncio.AbstractEventLoop] = None,
 ):
     from core_orchestrator.llm_gateway import LLMGateway
     from core_orchestrator.resilience_manager import ResilienceManager
@@ -231,6 +370,13 @@ def _run_execution(
         total=len(results),
         results=[{"task_id": r["task_id"], "verdict": r["verdict"]} for r in results],
     )
+
+    # ── Checkpoint: execution done ────────────────────────────────────
+    if loop:
+        completed = [r["task_id"] for r in results if r.get("verdict") == "pass"]
+        _write_checkpoint(ws, ws_id, loop, job.id, "execution_complete",
+                          completed_tasks=completed,
+                          extra={"passed": passed, "escalated": escalated})
 
 
 # ---------------------------------------------------------------------------

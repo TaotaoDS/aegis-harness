@@ -96,6 +96,61 @@ class SolutionStore:
 
     # ── Format ────────────────────────────────────────────────────────────
 
+    # ── Semantic search (pgvector / cosine similarity) ──────────────────
+
+    def semantic_search(self, query: str, top_k: int = 5) -> str:
+        """Return an LLM-ready context block of the most relevant solutions.
+
+        Uses cosine-similarity over OpenAI embeddings (via :mod:`.vector_store`).
+        Falls back to an empty string when the DB is unavailable, the OpenAI
+        API key is not configured, or ``query`` produces no embedding.
+
+        Parameters
+        ----------
+        query   : Natural-language description of the current task / problem.
+        top_k   : Maximum number of similar solutions to include.
+
+        Returns
+        -------
+        Formatted markdown context string (same schema as
+        :meth:`format_as_context`), or ``""`` when no results are available.
+        """
+        import asyncio
+        try:
+            from .vector_store import get_vector_store
+            vs = get_vector_store()
+
+            # Run the async search in the current event loop or a new one
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        future = pool.submit(asyncio.run, vs.search_similar(query, top_k=top_k))
+                        results = future.result(timeout=10)
+                else:
+                    results = loop.run_until_complete(vs.search_similar(query, top_k=top_k))
+            except RuntimeError:
+                results = asyncio.run(vs.search_similar(query, top_k=top_k))
+
+        except Exception:  # noqa: BLE001
+            return ""
+
+        if not results:
+            return ""
+
+        lines: List[str] = [
+            "## Semantic Memory: Relevant Past Solutions\n"
+            "The following lessons are semantically similar to the current task.\n",
+        ]
+        for i, r in enumerate(results, 1):
+            score = r.get("score", 0.0)
+            lines.append(f"### Lesson {i} (similarity: {score:.2f})")
+            lines.append(f"**Problem**: {r.get('problem', '')}")
+            lines.append(f"**Solution**: {r.get('solution', '')}")
+            lines.append("")
+        return "\n".join(lines)
+
     def format_as_context(self) -> str:
         """Return an LLM-ready context block of all known lessons.
 

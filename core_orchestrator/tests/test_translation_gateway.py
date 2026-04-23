@@ -33,7 +33,9 @@ class TestCEOInterviewLanguage:
 
     def test_interview_prompt_mentions_user_language(self):
         """The interview system prompt should instruct responding in user's native language."""
-        sample = _INTERVIEW_SYSTEM.format(requirement="test", qa_context="none")
+        sample = _INTERVIEW_SYSTEM.format(
+            requirement="test", qa_context="none", style_instructions=""
+        )
         assert "user" in sample.lower() and "language" in sample.lower()
 
     def test_interview_prompt_sent_to_llm_contains_language_instruction(self, tmp_path):

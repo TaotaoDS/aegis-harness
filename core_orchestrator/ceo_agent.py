@@ -25,6 +25,7 @@ from typing import List, Optional
 
 from .json_parser import parse_llm_json
 from .llm_gateway import LLMGateway
+from .user_profile import UserProfile
 from .workspace_manager import WorkspaceManager
 
 
@@ -52,6 +53,7 @@ Original requirement: {requirement}
 Prior Q&A:
 {qa_context}
 
+{style_instructions}\
 Respond in strict JSON (no markdown fences):
 {{
   "confidence": <integer 0-100>,
@@ -75,6 +77,44 @@ Rules:
 - IRON RULE: set done=true ONLY when confidence ≥ 95.
 """
 
+# Non-technical users get an expanded response schema with optional options[]
+_INTERVIEW_SYSTEM_NON_TECH = """\
+You are a friendly assistant helping someone (who is NOT a programmer)
+describe what they want to build. Ask ONE simple, plain-English question
+per round.
+
+Original requirement: {requirement}
+
+Prior Q&A:
+{qa_context}
+
+{style_instructions}\
+Respond in strict JSON (no markdown fences):
+{{
+  "confidence": <integer 0-100>,
+  "question": "your simple, plain-language question (≤ 2 sentences)",
+  "options": ["Option A: ...", "Option B: ...", "Option C: ..."],
+  "done": false
+}}
+
+The "options" field is OPTIONAL — include it only when offering concrete
+choices would genuinely help the user answer faster.
+
+When confidence ≥ 95:
+{{
+  "confidence": 97,
+  "question": "",
+  "options": [],
+  "done": true
+}}
+
+Rules:
+- NO technical jargon whatsoever (see style instructions above).
+- ONE question per round — short and immediately answerable.
+- Always respond in the user's language.
+- IRON RULE: set done=true ONLY when confidence ≥ 95.
+"""
+
 _PLAN_SYSTEM = """\
 You are a senior technical project manager. Decompose the following
 requirement into concrete, actionable sub-tasks.
@@ -88,7 +128,20 @@ Interview context:
 
 Respond in strict JSON (no markdown fences):
 {{"tasks": [
-  {{"id": "task_1", "title": "...", "description": "...", "priority": "high|medium|low"}},
+  {{
+    "id": "task_1",
+    "title": "...",
+    "description": "...",
+    "priority": "high|medium|low",
+    "depends_on": []
+  }},
+  {{
+    "id": "task_2",
+    "title": "...",
+    "description": "...",
+    "priority": "high|medium|low",
+    "depends_on": ["task_1"]
+  }},
   ...
 ]}}
 
@@ -96,6 +149,9 @@ Rules:
 - 3-7 tasks, ordered by dependency.
 - Each task must be independently assignable to a single agent.
 - Priorities: high (blocking), medium (important), low (nice-to-have).
+- ``depends_on``: list task IDs this task must wait for.  Use ``[]``
+  for tasks with no prerequisites.  Tasks sharing no dependency can
+  run in parallel — list only true blocking dependencies.
 - If solutions_context is provided, ensure tasks explicitly avoid the
   described pitfalls and apply the lessons learned.
 
@@ -145,22 +201,38 @@ _NO_SOLUTIONS = "(no prior experience recorded for this workspace yet)"
 
 
 class CEOAgent:
-    """Orchestrator that interviews, plans, and delegates."""
+    """Orchestrator that interviews, plans, and delegates.
+
+    Parameters
+    ----------
+    user_profile:
+        Optional ``UserProfile`` describing the person submitting the
+        requirement.  When provided, the CEO adapts its interview style:
+        - NON_TECHNICAL  → plain language, optional multiple-choice hints,
+          no jargon, friendlier tone.
+        - SEMI_TECHNICAL → light jargon OK, acronyms spelled out.
+        - TECHNICAL (default / None) → standard technical interview.
+
+        Existing callers that do not pass ``user_profile`` receive the same
+        behaviour as before (backward-compatible default: ``None``).
+    """
 
     def __init__(
         self,
         gateway: LLMGateway,
         workspace: WorkspaceManager,
         workspace_id: str,
+        user_profile: Optional[UserProfile] = None,
     ):
-        self._gateway    = gateway
-        self._workspace  = workspace
-        self._ws_id      = workspace_id
-        self._state      = "idle"
-        self._requirement = ""
-        self._qa_pairs: List[tuple] = []   # [(question, answer), ...]
+        self._gateway      = gateway
+        self._workspace    = workspace
+        self._ws_id        = workspace_id
+        self._user_profile = user_profile      # None → standard technical mode
+        self._state        = "idle"
+        self._requirement  = ""
+        self._qa_pairs: List[tuple] = []       # [(question, answer), ...]
         self._plan: Optional[dict] = None
-        self._confidence: int = 0          # tracks LLM-reported confidence
+        self._confidence: int = 0              # tracks LLM-reported confidence
 
     @property
     def state(self) -> str:
@@ -189,11 +261,25 @@ class CEOAgent:
             lines.append(f"  A: {a}")
         return "\n".join(lines)
 
-    def _ask_llm_interview(self) -> dict:
-        prompt = _INTERVIEW_SYSTEM.format(
-            requirement=self._requirement,
-            qa_context=self._format_qa_context(),
+    def _build_interview_prompt(self) -> str:
+        """Build the interview system prompt, adapted to the user profile."""
+        style = (
+            self._user_profile.interview_style_instructions()
+            if self._user_profile else ""
         )
+        template = (
+            _INTERVIEW_SYSTEM_NON_TECH
+            if (self._user_profile and self._user_profile.is_non_technical)
+            else _INTERVIEW_SYSTEM
+        )
+        return template.format(
+            requirement       = self._requirement,
+            qa_context        = self._format_qa_context(),
+            style_instructions = style,
+        )
+
+    def _ask_llm_interview(self) -> dict:
+        prompt = self._build_interview_prompt()
         result = self._gateway.send(prompt)
         return parse_llm_json(result["llm_response"])
 
@@ -291,6 +377,9 @@ class CEOAgent:
             lines.append(f"## {task['id']}: {task['title']}")
             lines.append(f"- **Priority:** {task['priority']}")
             lines.append(f"- **Description:** {task['description']}")
+            depends = task.get("depends_on", [])
+            if depends:
+                lines.append(f"- **Depends on:** {', '.join(depends)}")
             lines.append("")
         self._workspace.write(self._ws_id, "plan.md", "\n".join(lines))
 
@@ -410,6 +499,9 @@ class CEOAgent:
                 f"- **Priority:** {task['priority']}",
                 f"- **Description:** {task['description']}",
             ]
+            depends = task.get("depends_on", [])
+            if depends:
+                lines.append(f"- **Depends on:** {', '.join(depends)}")
             files_to_mod = task.get("files_to_modify", [])
             if files_to_mod:
                 lines.append(f"- **Type:** update")

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Node / frontend
+web/node_modules/
+web/.next/
+web/.npm/
+
+# Git
+.git/
+.gitignore
+
+# Secrets (never bake into image)
+.env
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs / CI
+*.md
+.github/
+
+# Workspaces (mounted as volume at runtime)
+workspaces/
+knowledge_base/

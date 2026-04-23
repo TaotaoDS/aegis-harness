@@ -20,8 +20,10 @@ Both patterns can be mixed freely within the same config file.
 
 import os
 import re
+import threading
+import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import yaml
 from dotenv import load_dotenv
@@ -29,6 +31,55 @@ from dotenv import load_dotenv
 from .llm_connector import ToolCall, ToolHandler, get_connector
 
 _DEFAULT_TEMPERATURE = 0.7
+
+# ---------------------------------------------------------------------------
+# Module-level TTL config cache
+# ---------------------------------------------------------------------------
+# Stores: path → (load_timestamp, raw_yaml_dict)
+# Key is the resolved absolute path string so different config files
+# never share a cache entry.  Tests use unique tmp paths — they always
+# miss the cache and read fresh, preserving isolation.
+
+_CONFIG_CACHE: Dict[str, Tuple[float, dict]] = {}
+_CACHE_LOCK   = threading.Lock()
+_DEFAULT_TTL  = 30.0   # seconds
+
+
+def _load_yaml_cached(config_path: str, ttl: float = _DEFAULT_TTL) -> dict:
+    """Return the parsed YAML dict for ``config_path``.
+
+    Re-reads the file when the cached entry is older than ``ttl`` seconds.
+    Thread-safe via ``_CACHE_LOCK``.
+    """
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        if config_path in _CONFIG_CACHE:
+            cached_at, cached_dict = _CONFIG_CACHE[config_path]
+            if now - cached_at < ttl:
+                return cached_dict          # cache hit
+
+        # Cache miss — (re)load from disk
+        with open(config_path) as fh:
+            raw = yaml.safe_load(fh)
+        _CONFIG_CACHE[config_path] = (now, raw)
+        return raw
+
+
+def invalidate_model_cache(config_path: Optional[str] = None) -> None:
+    """Invalidate the YAML config cache.
+
+    Parameters
+    ----------
+    config_path:
+        When given, only the entry for that path is removed.
+        When ``None``, the entire cache is cleared (useful after a
+        settings API call that may have changed the active model).
+    """
+    with _CACHE_LOCK:
+        if config_path:
+            _CONFIG_CACHE.pop(str(config_path), None)
+        else:
+            _CONFIG_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -67,20 +118,38 @@ class ConfigError(Exception):
 
 
 class ModelRouter:
-    """Load YAML config, resolve routes, dispatch through LLM connectors."""
+    """Load YAML config, resolve routes, dispatch through LLM connectors.
 
-    def __init__(self, config_path: Union[str, Path], env_path: Optional[Union[str, Path]] = None):
+    Config caching
+    --------------
+    By default the YAML file is cached for ``cache_ttl`` seconds
+    (default 30 s).  In production this means model-config changes made
+    via the Settings UI take effect within 30 s without a server restart.
+    In tests each instance receives a unique tmp-path so the cache never
+    interferes between test cases.
+
+    To force an immediate reload (e.g. right after a settings PUT), call
+    ``invalidate_model_cache(config_path)``.
+    """
+
+    def __init__(
+        self,
+        config_path: Union[str, Path],
+        env_path: Optional[Union[str, Path]] = None,
+        cache_ttl: float = _DEFAULT_TTL,
+    ):
         # Load .env before interpolation so ${VAR} references resolve correctly
         load_dotenv(dotenv_path=env_path or None)
 
-        config_path = Path(config_path)
+        config_path = Path(config_path).resolve()
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
-        with open(config_path) as f:
-            raw_cfg = yaml.safe_load(f)
+        self._config_path = str(config_path)
+        self._cache_ttl   = cache_ttl
 
         # Resolve ${VAR_NAME} placeholders throughout the entire config tree
+        raw_cfg = _load_yaml_cached(self._config_path, ttl=cache_ttl)
         cfg = _interpolate_env_vars(raw_cfg)
 
         if "models" not in cfg:
@@ -170,7 +239,12 @@ class ModelRouter:
         raise ConfigError(f"No route matched context: {context}")
 
     def call(self, model_name: str, text: str) -> str:
-        """Call a specific model by name, dispatching through its connector."""
+        """Call a specific model by name, dispatching through its connector.
+
+        Transient API errors (429, 5xx, rate-limit exceptions) are retried
+        automatically using exponential back-off via :mod:`.retry_utils`.
+        Non-transient errors propagate immediately.
+        """
         model_cfg = self._models.get(model_name)
         if not model_cfg:
             raise ConfigError(f"Unknown model: '{model_name}'")
@@ -184,7 +258,9 @@ class ModelRouter:
         except ValueError as e:
             raise ConfigError(f"Unknown provider: '{model_cfg['provider']}'") from e
 
-        return connector.call(
+        from .retry_utils import with_retry
+        return with_retry(
+            connector.call,
             model_id=model_cfg["model_id"],
             api_key=api_key,
             text=text,
@@ -221,7 +297,9 @@ class ModelRouter:
 
         connector = get_connector(model_cfg["provider"])
 
-        return connector.call_with_tools(
+        from .retry_utils import with_retry
+        return with_retry(
+            connector.call_with_tools,
             model_id=model_cfg["model_id"],
             api_key=api_key,
             system=system,

@@ -1,0 +1,105 @@
+# =============================================================================
+# AegisHarness — docker-compose (production-grade one-click deploy)
+# =============================================================================
+#
+# Quick start:
+#   cp .env.docker .env        # fill in your API keys
+#   docker compose up --build  # first run builds images + migrates DB
+#
+# Services:
+#   postgres   PostgreSQL 16 + pgvector extension  (port 5432)
+#   backend    FastAPI + Uvicorn                    (port 8000)
+#   frontend   Next.js (standalone)                (port 3000)
+#
+# Volumes:
+#   postgres_data   — DB files persist across restarts
+#   workspaces      — generated code/artifacts persist across restarts
+# =============================================================================
+
+services:
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL 16 with pgvector pre-installed
+  # --------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-harness}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-harness_secret}
+      POSTGRES_DB:       ${POSTGRES_DB:-harness}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-harness} -d ${POSTGRES_DB:-harness}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # Backend — FastAPI + Uvicorn
+  # --------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # ── DB ───────────────────────────────────────────────────────────────
+      DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-harness}:${POSTGRES_PASSWORD:-harness_secret}
+        @postgres:5432/${POSTGRES_DB:-harness}
+
+      # ── LLM API Keys (pass-through from host .env) ────────────────────
+      ANTHROPIC_API_KEY:  ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY:     ${OPENAI_API_KEY:-}
+      NVIDIA_API_KEY:     ${NVIDIA_API_KEY:-}
+      NVIDIA_BASE_URL:    ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      DEEPSEEK_API_KEY:   ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL:  ${DEEPSEEK_BASE_URL:-}
+      ZHIPU_API_KEY:      ${ZHIPU_API_KEY:-}
+      ZHIPU_BASE_URL:     ${ZHIPU_BASE_URL:-}
+      MOONSHOT_API_KEY:   ${MOONSHOT_API_KEY:-}
+      MOONSHOT_BASE_URL:  ${MOONSHOT_BASE_URL:-}
+
+      # ── Python path (avoid editable installs inside container) ────────
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # Workspaces survive container rebuilds
+      - workspaces:/app/workspaces
+
+  # --------------------------------------------------------------------------
+  # Frontend — Next.js standalone
+  # --------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        # Backend URL as seen from the browser (→ Next.js proxy rewrites to backend)
+        NEXT_PUBLIC_API_URL: http://localhost:${BACKEND_PORT:-8000}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+# ===========================================================================
+# Named volumes
+# ===========================================================================
+volumes:
+  postgres_data:
+    driver: local
+  workspaces:
+    driver: local

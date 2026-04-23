@@ -14,6 +14,7 @@ max_retries is configurable via models_config.yaml `execution.max_retries`.
 """
 
 import json
+import threading
 from typing import Dict, List, Optional
 
 import tiktoken
@@ -22,6 +23,7 @@ from .architect_agent import ArchitectAgent, ToolLLM
 from .evaluator import Evaluator, EvalResult
 from .knowledge_manager import KnowledgeManager
 from .llm_gateway import LLMGateway
+from .parallel_executor import ParallelExecutor
 from .qa_agent import QAAgent
 from .workspace_manager import WorkspaceManager
 
@@ -29,6 +31,7 @@ _DEFAULT_MAX_RETRIES = 3
 _DEFAULT_TOKEN_BUDGET = 100_000
 _DEFAULT_TOKEN_THRESHOLD = 0.8
 _DEFAULT_EVAL_TIMEOUT = 30
+_DEFAULT_PARALLEL_WORKERS = 1   # sequential by default — backward-compatible
 
 _encoding = tiktoken.get_encoding("cl100k_base")
 
@@ -56,6 +59,7 @@ class ResilienceManager:
         bus=None,
         escalated_tool_llm: Optional[ToolLLM] = None,
         hitl_manager=None,
+        parallel_workers: int = _DEFAULT_PARALLEL_WORKERS,
     ):
         from .event_bus import NullBus
         self._workspace = workspace
@@ -72,13 +76,16 @@ class ResilienceManager:
         self._solutions_context = solutions_context  # workspace lessons forwarded to Architect
         self._bus = bus or NullBus()
         self._hitl_manager = hitl_manager   # Optional HITLManager forwarded to ArchitectAgent
+        self._parallel_workers = max(1, int(parallel_workers))
+        self._lock = threading.Lock()       # guards _token_usage and _results
         self._token_usage = 0
         self._results: List[Dict] = []
 
     def _track_tokens(self, gateway: LLMGateway) -> None:
-        """Accumulate token usage from a gateway's history."""
-        for entry in gateway.history:
-            self._token_usage += _count_tokens(entry)
+        """Accumulate token usage from a gateway's history (thread-safe)."""
+        usage = sum(_count_tokens(entry) for entry in gateway.history)
+        with self._lock:
+            self._token_usage += usage
 
     def _budget_exceeded(self) -> bool:
         return self._token_usage >= self._token_budget * self._token_threshold
@@ -153,7 +160,8 @@ class ResilienceManager:
                     "attempts": attempt - 1, "escalation_level": escalation_level,
                     "path": f"escalations/{task_id}_escalation.md",
                 }
-                self._results.append(result)
+                with self._lock:
+                    self._results.append(result)
                 return result
 
             # Select tool_llm based on escalation level
@@ -268,7 +276,8 @@ class ResilienceManager:
                     "attempts": attempt, "escalation_level": escalation_level,
                     "path": review["path"],
                 }
-                self._results.append(result)
+                with self._lock:
+                    self._results.append(result)
                 return result
 
             # QA failed — escalate
@@ -300,8 +309,36 @@ class ResilienceManager:
         self._results.append(result)
         return result
 
+    def _read_depends_on(self, task_id: str) -> List[str]:
+        """Parse the ``Depends on:`` field from a task file.
+
+        Task files written by :meth:`CEOAgent.delegate` may contain a line::
+
+            - **Depends on:** task_1, task_2
+
+        Returns a list of dependency task IDs, or an empty list when the
+        field is absent.
+        """
+        task_file = f"tasks/{task_id}.md"
+        try:
+            content = self._workspace.read(self._ws_id, task_file)
+        except Exception:
+            return []
+        for line in content.split("\n"):
+            stripped = line.strip().lower()
+            if stripped.startswith("- **depends on:**"):
+                raw = line.split(":", 1)[-1].strip()
+                return [t.strip() for t in raw.split(",") if t.strip()]
+        return []
+
     def run_all(self) -> List[Dict]:
-        """Run the resilience loop for every task in tasks/."""
+        """Run the resilience loop for every task, honouring ``depends_on``.
+
+        Tasks are grouped into parallel *waves* by :func:`wave_schedule`:
+        tasks within the same wave have no unsatisfied dependencies and can
+        run concurrently.  ``parallel_workers=1`` (the default) keeps the
+        original sequential behaviour for backward compatibility.
+        """
         all_files = self._workspace.list_files(self._ws_id)
         task_ids = sorted(
             f.removeprefix("tasks/").removesuffix(".md")
@@ -309,8 +346,19 @@ class ResilienceManager:
             if f.startswith("tasks/") and f.endswith(".md")
         )
         self._bus.emit("pipeline.execution_start", task_count=len(task_ids))
-        results = [self.run_task_loop(tid) for tid in task_ids]
-        passed = sum(1 for r in results if r["verdict"] == "pass")
+
+        # Build dependency map from task file contents
+        depends_on: Dict[str, List[str]] = {
+            tid: self._read_depends_on(tid) for tid in task_ids
+        }
+
+        executor = ParallelExecutor(workers=self._parallel_workers)
+        results_map = executor.run(self.run_task_loop, depends_on)
+
+        # Return results in the original sorted task order
+        results = [results_map[tid] for tid in task_ids]
+
+        passed   = sum(1 for r in results if r["verdict"] == "pass")
         escalated = sum(1 for r in results if r["verdict"] == "escalated")
         self._bus.emit(
             "pipeline.execution_complete",

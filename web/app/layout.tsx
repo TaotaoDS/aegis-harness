@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Enterprise Harness",
+  title: "AegisHarness",
   description: "Multi-agent orchestration management console",
 };
 
@@ -15,12 +15,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="flex items-center gap-2">
             <span className="text-2xl">⚙️</span>
             <span className="font-bold text-white text-lg tracking-tight">
-              Enterprise Harness
+              AegisHarness
             </span>
           </div>
           <nav className="flex gap-6 ml-8 text-sm text-slate-400">
             <a href="/" className="hover:text-white transition-colors">任务总览</a>
+            <a href="/chat" className="hover:text-white transition-colors">💬 对话</a>
             <a href="/jobs/new" className="hover:text-white transition-colors">新建任务</a>
+            <a href="/settings" className="hover:text-white transition-colors">⚙ 设置</a>
           </nav>
         </header>
 

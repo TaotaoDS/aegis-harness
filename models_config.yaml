@@ -1,5 +1,5 @@
 # =============================================================================
-# Model Configuration — Enterprise Harness
+# Model Configuration — AegisHarness
 # =============================================================================
 # 此文件定义所有可用模型及路由规则。
 # API Key 绝不存储在此文件中，只引用 .env 中的环境变量名。
@@ -47,14 +47,14 @@ models:
   # 申请 Key: https://build.nvidia.com  (免费额度 1000 次调用)
   #
   # 写法 A — 环境变量名间接引用 (原有方式，始终兼容):
-  # nvidia-llama:
-  #   provider: openai
-  #   model_id: meta/llama-3.3-70b-instruct
-  #   api_key_env: NVIDIA_API_KEY
-  #   base_url_env: NVIDIA_BASE_URL        # https://integrate.api.nvidia.com/v1
-  #   max_tokens: 4096
-  #   temperature: 0.2
-  #   tier: standard
+  nvidia-glm:
+     provider: openai
+     model_id: z-ai/glm-5.1
+     api_key_env: NVIDIA_API_KEY
+     base_url_env: NVIDIA_BASE_URL        # https://integrate.api.nvidia.com/v1
+     max_tokens: 16384
+     temperature: 0.2
+     tier: standard
   #
   # 写法 B — ${VAR} 内联插值 (新增，推荐用于第三方接口，更直观):
   # nvidia-llama:
@@ -126,14 +126,8 @@ models:
      temperature: 0.7
   #   tier: standard
 routes:
-  - match: { customer: "enterprise", task: "reasoning" }
-    model: glm-5
-  - match: { customer: "enterprise" }
-    model: glm-5-turbo
-  - match: { task: "reasoning" }
-    model: glm-5
-  - match: {}                               # 兜底路由
-    model: glm-5-turbo
+  - match: {}                               # 兜底路由 — NVIDIA NIM GLM-5.1
+    model: nvidia-glm
   # ---------------------------------------------------------------------------
   # Kimi / Moonshot (OpenAI 兼容协议)
   # 长上下文能力突出 (128k/1M)。取消注释即可启用。

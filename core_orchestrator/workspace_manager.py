@@ -11,8 +11,9 @@ Supports two layout modes:
     physical separation is transparent.
 """
 
+import json
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 
 class WorkspaceError(Exception):
@@ -178,3 +179,49 @@ class WorkspaceManager:
         if not file_path.is_file():
             raise WorkspaceError(f"File not found: '{filename}' in workspace '{workspace_id}'")
         file_path.unlink()
+
+    # -----------------------------------------------------------------------
+    # Checkpoint helpers (pipeline crash-recovery)
+    # -----------------------------------------------------------------------
+
+    def save_checkpoint(
+        self,
+        workspace_id: str,
+        data: Dict[str, Any],
+    ) -> None:
+        """Persist a pipeline checkpoint to ``checkpoint.json``.
+
+        ``data`` should be a JSON-serialisable dict that captures enough
+        state to resume the pipeline after a crash.  Typical keys:
+
+            phase               — e.g. "interviewing", "planning", "executing"
+            job_id              — owning job id
+            completed_tasks     — list of task IDs already done
+            current_task_index  — zero-based index in the task list
+
+        The workspace must already exist; the file is created/overwritten
+        atomically (write-to-temp, then rename).
+        """
+        self._require_workspace(workspace_id)
+        file_path = self._safe_path(workspace_id, "checkpoint.json")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        content = json.dumps(data, ensure_ascii=False, indent=2)
+        # Atomic write via a sibling temp file
+        tmp = file_path.with_suffix(".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(file_path)
+
+    def load_checkpoint(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        """Read the last saved checkpoint.
+
+        Returns the parsed dict, or ``None`` when no checkpoint exists or
+        the file is corrupt.
+        """
+        if not self.exists(workspace_id, "checkpoint.json"):
+            return None
+        try:
+            content = self.read(workspace_id, "checkpoint.json")
+            return json.loads(content)
+        except (json.JSONDecodeError, WorkspaceError):
+            return None

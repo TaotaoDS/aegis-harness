@@ -124,7 +124,7 @@ class EventBus:
         if enable_file_log:
             log_dir.mkdir(parents=True, exist_ok=True)
             log_path = log_dir / AUDIT_LOG_FILENAME
-            logger = logging.getLogger(f"enterprise_harness.audit.{id(self)}")
+            logger = logging.getLogger(f"aegis_harness.audit.{id(self)}")
             logger.setLevel(logging.INFO)
             # Avoid duplicate handlers on repeated construction
             if not logger.handlers:

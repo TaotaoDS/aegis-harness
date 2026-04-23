@@ -1,4 +1,4 @@
-"""Enterprise Harness — CLI entry point with checkpoint resume.
+"""AegisHarness — CLI entry point with checkpoint resume.
 
 Full pipeline:
     CEO (interview → plan → delegate)
@@ -477,7 +477,7 @@ def _print_summary(status: Dict, ws_id: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Enterprise Harness — Multi-agent orchestration CLI",
+        description="AegisHarness — Multi-agent orchestration CLI",
     )
     parser.add_argument(
         "--workspace", "-w",
@@ -501,7 +501,7 @@ def main() -> None:
     ws_id = args.workspace
 
     print("=" * 60)
-    print("  Enterprise Harness — Multi-Agent Orchestrator")
+    print("  AegisHarness — Multi-Agent Orchestrator")
     print("=" * 60)
     print(f"Workspace: {ws_id}\n")
 
