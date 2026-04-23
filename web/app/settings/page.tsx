@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ProfileTab } from "./components/ProfileTab";
+import { ProfileTab, UserProfile } from "./components/ProfileTab";
 import { CEOTab } from "./components/CEOTab";
 import { APIKeysTab } from "./components/APIKeysTab";
 import { ModelsTab } from "./components/ModelsTab";
@@ -21,10 +21,10 @@ const TABS: { key: TabKey; label: string; icon: string }[] = [
   { key: "mcp",     label: "MCP 工具",    icon: "🔧" },
 ];
 
-const EMPTY_PROFILE = {
+const EMPTY_PROFILE: UserProfile = {
   name: "",
   role: "",
-  technical_level: "technical" as const,
+  technical_level: "technical",
   language: "auto",
   notes: "",
 };

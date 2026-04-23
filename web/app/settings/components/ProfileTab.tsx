@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-interface UserProfile {
+export interface UserProfile {
   name: string;
   role: string;
   technical_level: "technical" | "semi_technical" | "non_technical";
