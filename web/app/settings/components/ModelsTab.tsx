@@ -35,8 +35,10 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
   const [models, setModels] = useState<Record<string, ModelEntry>>({});
   const [defaultModel, setDefaultModel] = useState(initialConfig.default_model ?? "");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   // Load available models from the backend
   useEffect(() => {
@@ -45,13 +47,17 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
       .then((d) => {
         if (d?.value?.models) setModels(d.value.models);
       })
-      .catch(() => {})
+      .catch(() => {
+        setLoadError(t.models.loadError);
+      })
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      setSaveError("");
       await onSaveConfig({ default_model: defaultModel });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -61,6 +67,8 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value: { default_model: defaultModel } }),
       });
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : t.models.saveError);
     } finally {
       setSaving(false);
     }
@@ -107,6 +115,12 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
             </button>
           </div>
         )}
+        {saveError && (
+          <div className="bg-red-950/60 border border-red-800 rounded-lg px-4 py-3 space-y-1 mt-3">
+            <p className="text-red-300 text-sm font-medium">⚠️ {saveError}</p>
+            <p className="text-red-400/80 text-xs">{t.models.saveErrorHint}</p>
+          </div>
+        )}
         <p className="text-xs text-slate-500 mt-2">
           {t.models.overrideHint}
         </p>
@@ -115,6 +129,11 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
       {/* Model list */}
       {loading ? (
         <div className="text-slate-500 text-sm text-center py-8">{t.models.loading}</div>
+      ) : loadError ? (
+        <div className="bg-red-950/60 border border-red-800 rounded-lg px-4 py-3 space-y-1">
+          <p className="text-red-300 text-sm font-medium">⚠️ {loadError}</p>
+          <p className="text-red-400/80 text-xs">{t.models.saveErrorHint}</p>
+        </div>
       ) : Object.keys(models).length === 0 ? (
         <div className="text-center py-8 text-slate-500">
           <p className="text-sm">{t.models.empty}</p>

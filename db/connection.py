@@ -41,7 +41,7 @@ _session_factory: Optional[async_sessionmaker] = None
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _normalise_url(url: str) -> str:
+def normalise_db_url(url: str) -> str:
     """Ensure the URL uses the asyncpg driver scheme."""
     for plain in ("postgresql://", "postgres://"):
         if url.startswith(plain):
@@ -51,7 +51,7 @@ def _normalise_url(url: str) -> str:
 
 def _get_database_url() -> Optional[str]:
     raw = os.getenv("DATABASE_URL", "").strip()
-    return _normalise_url(raw) if raw else None
+    return normalise_db_url(raw) if raw else None
 
 
 # ---------------------------------------------------------------------------

@@ -90,10 +90,12 @@ export function APIKeysTab({ initial, onSave }: Props) {
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const update = (key: keyof APIKeys, val: string) => {
     setForm((f) => ({ ...f, [key]: val }));
     setSaved(false);
+    setSaveError("");
   };
 
   const toggle = (key: string) =>
@@ -114,10 +116,13 @@ export function APIKeysTab({ initial, onSave }: Props) {
     }
     setSaving(true);
     try {
+      setSaveError("");
       await onSave(toSave);
       setForm({});   // clear inputs after successful save
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : t.apikeys.saveError);
     } finally {
       setSaving(false);
     }
@@ -186,6 +191,13 @@ export function APIKeysTab({ initial, onSave }: Props) {
           );
         })}
       </div>
+
+      {saveError && (
+        <div className="bg-red-950/60 border border-red-800 rounded-lg px-4 py-3 space-y-1">
+          <p className="text-red-300 text-sm font-medium">⚠️ {saveError}</p>
+          <p className="text-red-400/80 text-xs">{t.apikeys.saveErrorHint}</p>
+        </div>
+      )}
 
       <div className="flex items-center gap-4">
         <button

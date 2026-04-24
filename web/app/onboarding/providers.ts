@@ -255,6 +255,18 @@ export const PROVIDER_GROUPS: {
 // Helper
 // ---------------------------------------------------------------------------
 
+/** Build a ProviderConfig for `p`, merging any values already in `override`. */
+export function makeDefaultConfig(
+  p: ProviderDef,
+  override?: Partial<ProviderConfig>,
+): ProviderConfig {
+  return {
+    apiKey:  override?.apiKey  ?? "",
+    baseUrl: override?.baseUrl ?? p.defaultBaseUrl,
+    model:   override?.model   ?? "",
+  };
+}
+
 /** A provider is "configured" when it has enough information to be usable. */
 export function isProviderConfigured(
   id: string,

@@ -19,10 +19,13 @@ export const zh = {
     failedRejected: "失败/拒绝",
     loading: "加载中…",
     noJobs: "还没有任务",
-    noJobsHint: "点击右上角「新建任务」开始你的第一个 AI 开发任务",
+    noJobsHint: "点击「新建任务」开始你的第一个 AI 开发任务",
     events: (n: number) => `${n} 个事件`,
     typeUpdate: "🔄 更新",
     typeNew: "🚀 新建",
+    loadError: "加载任务列表失败",
+    retryBtn: "重试",
+    backendHint: "请确认后端服务在 port 8000 正常运行",
   },
 
   jobNew: {
@@ -127,6 +130,8 @@ export const zh = {
     saving: "保存中…",
     saved: "✓ 已保存",
     saveBtn: "保存画像",
+    saveError: "保存失败",
+    saveErrorHint: "请确认后端服务在 port 8000 正常运行，然后重试",
   },
 
   ceo: {
@@ -144,6 +149,8 @@ export const zh = {
     saving: "保存中…",
     saved: "✓ 已保存",
     saveBtn: "保存配置",
+    saveError: "保存失败",
+    saveErrorHint: "请确认后端服务在 port 8000 正常运行，然后重试",
   },
 
   apikeys: {
@@ -157,6 +164,8 @@ export const zh = {
     saved: "✓ 已保存",
     saveBtn: "更新 Key",
     hint: "仅填写需要更新的字段，空白字段将保留原值。",
+    saveError: "保存失败",
+    saveErrorHint: "请确认后端服务在 port 8000 正常运行，然后重试",
   },
 
   models: {
@@ -176,6 +185,9 @@ export const zh = {
     setDefault: "设为默认",
     editHint:
       "添加或删除模型请直接编辑 models_config.yaml，服务会在 30 秒内自动感知变更。",
+    loadError: "加载模型列表失败",
+    saveError: "保存模型配置失败",
+    saveErrorHint: "请确认后端服务在 port 8000 正常运行，然后重试",
   },
 
   mcp: {

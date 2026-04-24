@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
-import { Nav } from "@/components/Nav";
+import { Shell } from "@/components/Shell";
 
 export const metadata: Metadata = {
   title: "AegisHarness",
@@ -13,10 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN">
       <body className="min-h-screen bg-[#0a0f1e] text-slate-200">
         <Providers>
-          <Nav />
-          <main className="container mx-auto px-6 py-8 max-w-7xl">
-            {children}
-          </main>
+          <Shell>{children}</Shell>
         </Providers>
       </body>
     </html>

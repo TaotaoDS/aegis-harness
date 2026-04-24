@@ -18,18 +18,23 @@ export function CEOTab({ initial, onSave }: Props) {
   const [form, setForm] = useState<CEOConfig>(initial);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const update = (key: keyof CEOConfig, val: string) => {
     setForm((f) => ({ ...f, [key]: val }));
     setSaved(false);
+    setSaveError("");
   };
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      setSaveError("");
       await onSave(form);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : t.ceo.saveError);
     } finally {
       setSaving(false);
     }
@@ -95,6 +100,13 @@ export function CEOTab({ initial, onSave }: Props) {
           </div>
         </div>
       </div>
+
+      {saveError && (
+        <div className="bg-red-950/60 border border-red-800 rounded-lg px-4 py-3 space-y-1">
+          <p className="text-red-300 text-sm font-medium">⚠️ {saveError}</p>
+          <p className="text-red-400/80 text-xs">{t.ceo.saveErrorHint}</p>
+        </div>
+      )}
 
       <button
         onClick={handleSave}

@@ -27,6 +27,7 @@ export function ProfileTab({ initial, onSave }: Props) {
   const [form, setForm] = useState<UserProfile>(initial);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const TECH_LEVELS: {
     value: "technical" | "semi_technical" | "non_technical";
@@ -57,14 +58,18 @@ export function ProfileTab({ initial, onSave }: Props) {
   const update = (key: keyof UserProfile, val: string) => {
     setForm((f) => ({ ...f, [key]: val }));
     setSaved(false);
+    setSaveError("");
   };
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      setSaveError("");
       await onSave(form);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : t.profile.saveError);
     } finally {
       setSaving(false);
     }
@@ -166,6 +171,13 @@ export function ProfileTab({ initial, onSave }: Props) {
           placeholder={t.profile.notesPlaceholder}
         />
       </div>
+
+      {saveError && (
+        <div className="bg-red-950/60 border border-red-800 rounded-lg px-4 py-3 space-y-1">
+          <p className="text-red-300 text-sm font-medium">⚠️ {saveError}</p>
+          <p className="text-red-400/80 text-xs">{t.profile.saveErrorHint}</p>
+        </div>
+      )}
 
       <button
         onClick={handleSave}

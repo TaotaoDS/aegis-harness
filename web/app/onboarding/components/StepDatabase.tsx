@@ -25,6 +25,7 @@ export function StepDatabase({ initial, onNext, onBack }: Props) {
     if (!url.trim()) return;
     setStatus("testing");
     setErrMsg("");
+    setShowSkipWarning(false);
     setLatency(null);
     try {
       const res = await fetch("/api/proxy/settings/test_db_connection", {

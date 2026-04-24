@@ -1,18 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n";
 import {
   ALL_PROVIDERS,
   PROVIDER_GROUPS,
   isProviderConfigured,
+  makeDefaultConfig,
   type ProvidersState,
   type ProviderConfig,
 } from "../providers";
-
-// ---------------------------------------------------------------------------
-// Props
-// ---------------------------------------------------------------------------
 
 interface Props {
   initial: ProvidersState;
@@ -20,26 +17,11 @@ interface Props {
   onBack: () => void;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Build the full configs map, pre-filling base URLs from provider defaults. */
 function buildInitialConfigs(initial: ProvidersState): ProvidersState {
-  const result: ProvidersState = {};
-  for (const p of ALL_PROVIDERS) {
-    result[p.id] = {
-      apiKey:  initial[p.id]?.apiKey  ?? "",
-      baseUrl: initial[p.id]?.baseUrl ?? p.defaultBaseUrl,
-      model:   initial[p.id]?.model   ?? "",
-    };
-  }
-  return result;
+  return Object.fromEntries(
+    ALL_PROVIDERS.map((p) => [p.id, makeDefaultConfig(p, initial[p.id])]),
+  );
 }
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
 
 export function StepAPIKeys({ initial, onNext, onBack }: Props) {
   const t  = useT();
@@ -53,11 +35,10 @@ export function StepAPIKeys({ initial, onNext, onBack }: Props) {
   const selectedDef = ALL_PROVIDERS.find((p) => p.id === selectedId)!;
   const selectedCfg = configs[selectedId];
 
-  const configuredCount = ALL_PROVIDERS.filter((p) =>
-    isProviderConfigured(p.id, configs),
-  ).length;
-
-  // ── Field update ──────────────────────────────────────────────────────────
+  const configuredProviders = useMemo(
+    () => ALL_PROVIDERS.filter((p) => isProviderConfigured(p.id, configs)),
+    [configs],
+  );
 
   const updateField = (field: keyof ProviderConfig, value: string) => {
     setConfigs((prev) => ({
@@ -67,29 +48,21 @@ export function StepAPIKeys({ initial, onNext, onBack }: Props) {
     setError("");
   };
 
-  // ── Navigation ────────────────────────────────────────────────────────────
-
   const handleProviderClick = (id: string) => {
     setSelectedId(id);
     setKeyVisible(false);
   };
 
   const handleNext = () => {
-    if (configuredCount === 0) {
+    if (configuredProviders.length === 0) {
       setError(ta.error);
       return;
     }
-    // Only forward providers that are actually configured
-    const filtered: ProvidersState = {};
-    for (const p of ALL_PROVIDERS) {
-      if (isProviderConfigured(p.id, configs)) {
-        filtered[p.id] = configs[p.id];
-      }
-    }
+    const filtered = Object.fromEntries(
+      configuredProviders.map((p) => [p.id, configs[p.id]]),
+    );
     onNext(filtered);
   };
-
-  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-4">
@@ -102,7 +75,6 @@ export function StepAPIKeys({ initial, onNext, onBack }: Props) {
         <p className="text-slate-400 text-sm mt-2 leading-relaxed">{ta.subtitle}</p>
       </div>
 
-      {/* ── Two-panel layout ─────────────────────────────────────────────── */}
       <div className="flex border border-slate-700 rounded-xl overflow-hidden h-[400px]">
 
         {/* Left: provider sidebar */}
@@ -268,9 +240,9 @@ export function StepAPIKeys({ initial, onNext, onBack }: Props) {
           className="flex-1 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
         >
           {ta.next}
-          {configuredCount > 0 && (
+          {configuredProviders.length > 0 && (
             <span className="ml-1.5 text-blue-200 font-normal">
-              ({configuredCount})
+              ({configuredProviders.length})
             </span>
           )}
         </button>

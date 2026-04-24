@@ -21,6 +21,7 @@ export default function DashboardPage() {
   const t = useT();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState("");
 
   // ── Onboarding check ───────────────────────────────────────────────────
   // If the user has never configured API keys (and hasn't skipped onboarding),
@@ -52,11 +53,12 @@ export default function DashboardPage() {
   // ────────────────────────────────────────────────────────────────────────
 
   const fetchJobs = async () => {
+    setFetchError("");
     try {
       const res = await fetch("/api/proxy/jobs");
       if (res.ok) setJobs(await res.json());
     } catch {
-      // ignore
+      setFetchError(t.dashboard.loadError);
     } finally {
       setLoading(false);
     }
@@ -83,6 +85,21 @@ export default function DashboardPage() {
           <span>＋</span> {t.dashboard.newJob}
         </Link>
       </div>
+
+      {fetchError && (
+        <div className="bg-red-950/60 border border-red-800 rounded-xl px-4 py-3 flex items-center justify-between gap-4">
+          <div className="space-y-0.5">
+            <p className="text-red-300 text-sm font-medium">⚠️ {fetchError}</p>
+            <p className="text-red-400/80 text-xs">{t.dashboard.backendHint}</p>
+          </div>
+          <button
+            onClick={fetchJobs}
+            className="px-3 py-1.5 text-xs bg-red-900/40 hover:bg-red-800/60 border border-red-700 text-red-300 rounded-lg transition-colors flex-shrink-0"
+          >
+            {t.dashboard.retryBtn}
+          </button>
+        </div>
+      )}
 
       {/* Stats cards */}
       {!loading && (

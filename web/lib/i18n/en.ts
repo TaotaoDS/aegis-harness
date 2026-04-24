@@ -18,10 +18,13 @@ export const en: Translations = {
     failedRejected: "Failed/Rejected",
     loading: "Loading…",
     noJobs: "No tasks yet",
-    noJobsHint: 'Click "New Task" in the top right to start your first AI development task',
+    noJobsHint: 'Click "New Task" to start your first AI development task',
     events: (n: number) => `${n} event${n === 1 ? "" : "s"}`,
     typeUpdate: "🔄 Update",
     typeNew: "🚀 New",
+    loadError: "Failed to load task list",
+    retryBtn: "Retry",
+    backendHint: "Check that the backend is running on port 8000",
   },
 
   jobNew: {
@@ -130,6 +133,8 @@ export const en: Translations = {
     saving: "Saving…",
     saved: "✓ Saved",
     saveBtn: "Save Profile",
+    saveError: "Save failed",
+    saveErrorHint: "Check that the backend is running on port 8000, then retry",
   },
 
   ceo: {
@@ -148,6 +153,8 @@ export const en: Translations = {
     saving: "Saving…",
     saved: "✓ Saved",
     saveBtn: "Save Config",
+    saveError: "Save failed",
+    saveErrorHint: "Check that the backend is running on port 8000, then retry",
   },
 
   apikeys: {
@@ -162,6 +169,8 @@ export const en: Translations = {
     saved: "✓ Saved",
     saveBtn: "Update Keys",
     hint: "Only fill in fields you want to update; blank fields keep their current value.",
+    saveError: "Save failed",
+    saveErrorHint: "Check that the backend is running on port 8000, then retry",
   },
 
   models: {
@@ -182,6 +191,9 @@ export const en: Translations = {
     setDefault: "Set as default",
     editHint:
       "To add or remove models, edit models_config.yaml directly — changes are detected within 30 s.",
+    loadError: "Failed to load model list",
+    saveError: "Failed to save model config",
+    saveErrorHint: "Check that the backend is running on port 8000, then retry",
   },
 
   mcp: {

@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from db.connection import normalise_db_url
 from ..settings_service import get_all_settings, get_setting, set_setting
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -94,12 +95,7 @@ async def test_db_connection(body: DbTestRequest) -> Dict[str, Any]:
     if not raw_url:
         raise HTTPException(status_code=422, detail="url is required")
 
-    # Normalise to asyncpg driver scheme
-    normalised = raw_url
-    for plain in ("postgresql://", "postgres://"):
-        if raw_url.startswith(plain):
-            normalised = "postgresql+asyncpg://" + raw_url[len(plain):]
-            break
+    normalised = normalise_db_url(raw_url)
 
     engine = None
     t0 = time.monotonic()
