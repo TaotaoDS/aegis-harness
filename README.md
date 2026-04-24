@@ -3,6 +3,8 @@
 > **v0.0.2** — Multi-Agent Code Generation & Orchestration Platform  
 > 598 tests passing · 17-provider BYOM · i18n (zh/en) · PostgreSQL + pgvector · Kahn BFS Wave Scheduler · SSE Streaming Chat UI · MCP Dynamic Tool Manager
 
+English | [中文](./README.zh-CN.md)
+
 ---
 
 ## What is AegisHarness?
