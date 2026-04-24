@@ -115,7 +115,7 @@ npm run dev
 
 ### i18n — 自动语言检测
 
-整个 Web 控制台根据 `navigator.language` 自动在**简体中文**与**英文**之间切换，顶部导航栏同时提供手动 中文 / EN 切换按钮。所有 18 个组件均已接入 `useT()` 国际化钩子，零硬编码字符串。
+整个 Web 控制台根据 `navigator.language` 自动在**简体中文**与**英文**之间切换，左侧边栏底部提供手动 中文 / EN 切换按钮。所有 18 个组件均已接入 `useT()` 国际化钩子，零硬编码字符串。
 
 ### PII 脱敏中间件
 
@@ -302,7 +302,8 @@ enterprise-harness/           ← 仓库根目录（AegisHarness v0.0.2）
 ├── web/                      ← Next.js 14 前端
 │   ├── lib/i18n/             ← zh.ts + en.ts + React Context（新增）
 │   ├── components/
-│   │   ├── Nav.tsx           ← 带中英切换的顶部导航（新增）
+│   │   ├── Sidebar.tsx       ← 左侧边栏导航 + 中英切换（新增）
+│   │   ├── Shell.tsx         ← 布局外壳（侧边栏+主区；onboarding 全屏）（新增）
 │   │   └── Providers.tsx     ← LocaleProvider 客户端包装（新增）
 │   └── app/
 │       ├── chat/             ← SSE 流式对话 UI

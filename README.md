@@ -64,7 +64,7 @@ Without `DATABASE_URL` the system runs in **file-only mode** — full functional
 └──────────────────────┬──────────────────────────────┘
                        │ HTTP / SSE
 ┌──────────────────────▼──────────────────────────────┐
-│           AegisHarness API  v0.0.1  (FastAPI)        │
+│           AegisHarness API  v0.0.2  (FastAPI)        │
 │  /jobs  /events (SSE)  /settings  /mcp/servers      │
 │  Lifespan: DB init + crash recovery                 │
 └──────────────────────┬──────────────────────────────┘
@@ -119,7 +119,7 @@ endpoint URL and model name are required.
 
 The entire web console now switches between **Chinese (Simplified)** and
 **English** based on `navigator.language`, with a manual 中文 / EN toggle in
-the top navigation bar.
+the left sidebar.
 
 ### PII Sanitisation Middleware
 
@@ -304,7 +304,8 @@ enterprise-harness/           ← repo root (project: AegisHarness v0.0.2)
 ├── web/                      ← Next.js 14 frontend
 │   ├── lib/i18n/             ← zh.ts + en.ts + React context (NEW)
 │   ├── components/
-│   │   ├── Nav.tsx           ← top nav with zh/en toggle (NEW)
+│   │   ├── Sidebar.tsx       ← left sidebar with nav links + zh/en toggle (NEW)
+│   │   ├── Shell.tsx         ← layout shell (sidebar + main, fullscreen for onboarding) (NEW)
 │   │   └── Providers.tsx     ← LocaleProvider client wrapper (NEW)
 │   └── app/
 │       ├── chat/             ← SSE streaming chat UI
