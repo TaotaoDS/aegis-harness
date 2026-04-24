@@ -10,6 +10,7 @@ import {
   Cell,
 } from "recharts";
 import type { StreamEvent } from "@/hooks/useEventStream";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   events: StreamEvent[];
@@ -56,14 +57,15 @@ const CHART_FILL = "#3b82f6";
  * Shows a bar chart of agent event distribution.
  */
 export function SummaryDashboard({ events, finalStatus }: Props) {
+  const t = useT();
   const chartData  = buildChartData(events);
   const color      = STATUS_COLORS[finalStatus] ?? "#64748b";
   const statusLabel =
     finalStatus === "completed"
-      ? "任务全部完成 🎉"
+      ? t.components.summary.completed
       : finalStatus === "rejected"
-      ? "任务已取消 ⛔"
-      : "任务执行失败 ❌";
+      ? t.components.summary.rejected
+      : t.components.summary.failed;
 
   const filesWritten = events.filter((e) => e.type === "architect.file_written").length;
   const attempts     = events.filter((e) => e.type === "resilience.attempt_start").length;
@@ -79,16 +81,16 @@ export function SummaryDashboard({ events, finalStatus }: Props) {
           {statusLabel}
         </h3>
         <p className="text-slate-400 text-sm mt-0.5">
-          共处理 {events.length} 个事件
+          {t.components.summary.events(events.length)}
         </p>
       </div>
 
       {/* Stats row */}
       <div className="grid grid-cols-3 divide-x divide-slate-700 border-t border-slate-700">
         {[
-          { label: "写入文件", value: filesWritten },
-          { label: "总事件数", value: events.length },
-          { label: "重试次数", value: Math.max(0, attempts - 1) },
+          { label: t.components.summary.filesWritten, value: filesWritten },
+          { label: t.components.summary.totalEvents, value: events.length },
+          { label: t.components.summary.retries, value: Math.max(0, attempts - 1) },
         ].map(({ label, value }) => (
           <div key={label} className="px-5 py-3 text-center">
             <div className="text-2xl font-bold text-white">{value}</div>
@@ -100,7 +102,7 @@ export function SummaryDashboard({ events, finalStatus }: Props) {
       {/* Chart */}
       {chartData.length > 0 && (
         <div className="px-5 py-4 border-t border-slate-700">
-          <p className="text-slate-400 text-xs mb-3">各 Agent 事件分布</p>
+          <p className="text-slate-400 text-xs mb-3">{t.components.summary.distribution}</p>
           <ResponsiveContainer width="100%" height={120}>
             <BarChart data={chartData} barSize={28}>
               <XAxis

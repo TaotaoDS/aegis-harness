@@ -5,6 +5,7 @@ import type { StreamEvent } from "@/hooks/useEventStream";
 import { EventCard }        from "@/components/EventCard";
 import { RICH_EVENTS }      from "@/lib/eventLabels";
 import { formatTime }       from "@/lib/utils";
+import { useT }             from "@/lib/i18n";
 
 interface Props {
   events: StreamEvent[];
@@ -37,6 +38,7 @@ function dotColor(type: string): string {
  * an EventCard below their row.
  */
 export function Timeline({ events, autoScroll = true }: Props) {
+  const t = useT();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -50,7 +52,7 @@ export function Timeline({ events, autoScroll = true }: Props) {
       <div className="flex items-center justify-center py-16 text-slate-500">
         <div className="text-center">
           <div className="live-dot w-2 h-2 bg-blue-500 rounded-full mx-auto mb-3" />
-          <p className="text-sm">等待事件流…</p>
+          <p className="text-sm">{t.timeline.waiting}</p>
         </div>
       </div>
     );

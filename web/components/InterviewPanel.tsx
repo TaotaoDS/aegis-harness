@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   jobId: string;
@@ -19,6 +20,7 @@ interface Props {
  * know the pipeline is paused and waiting for their input.
  */
 export function InterviewPanel({ jobId, question, onAnswered }: Props) {
+  const t = useT();
   const [answer,     setAnswer]     = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error,      setError]      = useState("");
@@ -33,7 +35,7 @@ export function InterviewPanel({ jobId, question, onAnswered }: Props) {
     e.preventDefault();
     const trimmed = answer.trim();
     if (!trimmed) {
-      setError("请输入回答后再提交");
+      setError(t.interview.errorEmpty);
       return;
     }
 
@@ -49,14 +51,14 @@ export function InterviewPanel({ jobId, question, onAnswered }: Props) {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data?.detail ?? `提交失败 (${res.status})`);
+        setError(data?.detail ?? t.interview.errorSubmit(res.status));
         return;
       }
 
       setAnswer("");
       onAnswered();
     } catch {
-      setError("网络错误，请重试");
+      setError(t.interview.errorNetwork);
     } finally {
       setSubmitting(false);
     }
@@ -75,10 +77,10 @@ export function InterviewPanel({ jobId, question, onAnswered }: Props) {
       <div className="flex items-center gap-3 px-5 py-3 border-b border-yellow-500/30 bg-yellow-900/20">
         <span className="live-dot w-2 h-2 bg-yellow-400 rounded-full shrink-0" />
         <span className="text-yellow-300 text-sm font-medium">
-          CEO 正在访谈 — 请回答以下问题
+          {t.interview.title}
         </span>
         <span className="ml-auto text-xs text-yellow-500/70">
-          回答越详细，生成的计划越精准
+          {t.interview.detailHint}
         </span>
       </div>
 
@@ -97,7 +99,7 @@ export function InterviewPanel({ jobId, question, onAnswered }: Props) {
           onChange={(e) => setAnswer(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={3}
-          placeholder="输入你的回答… (Ctrl+Enter 快速提交)"
+          placeholder={t.interview.placeholder}
           disabled={submitting}
           className="w-full bg-slate-800 border border-slate-600 focus:border-yellow-500 rounded-xl px-4 py-3 text-slate-200 text-sm resize-none focus:outline-none transition-colors disabled:opacity-50"
         />
@@ -108,7 +110,7 @@ export function InterviewPanel({ jobId, question, onAnswered }: Props) {
 
         <div className="flex items-center justify-between">
           <p className="text-slate-500 text-xs">
-            CEO 置信度达到 95% 后将自动进入规划阶段
+            {t.interview.confidenceHint}
           </p>
           <button
             type="submit"
@@ -117,11 +119,11 @@ export function InterviewPanel({ jobId, question, onAnswered }: Props) {
           >
             {submitting ? (
               <>
-                <span className="animate-spin">⟳</span> 提交中…
+                <span className="animate-spin">⟳</span> {t.interview.submitting}
               </>
             ) : (
               <>
-                <span>↩</span> 提交回答
+                {t.interview.submit}
               </>
             )}
           </button>

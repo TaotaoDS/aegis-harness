@@ -1,5 +1,7 @@
 "use client";
 
+import { useT } from "@/lib/i18n";
+
 interface Props {
   passed: boolean;
   data: Record<string, unknown>;
@@ -11,6 +13,7 @@ interface Props {
  * Rendered for: evaluator.pass, evaluator.fail, qa.pass, qa.fail
  */
 export function QAVerdict({ passed, data }: Props) {
+  const t = useT();
   const feedback = (data.feedback as string) ?? "";
   const issues   = (data.issues   as string[]) ?? [];
 
@@ -29,7 +32,7 @@ export function QAVerdict({ passed, data }: Props) {
             passed ? "text-green-300" : "text-red-300"
           }`}
         >
-          {passed ? "验证通过" : "验证未通过"}
+          {passed ? t.components.qaVerdict.pass : t.components.qaVerdict.fail}
         </span>
       </div>
 

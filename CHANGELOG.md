@@ -2,6 +2,101 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.2] — 2026-04-24
+
+### Onboarding Wizard — Complete Redesign
+
+The first-run setup wizard has been rebuilt from a flat scrolling form into a
+two-panel provider explorer with fully open model configuration.
+
+**New layout (`StepAPIKeys` — `web/app/onboarding/components/StepAPIKeys.tsx`)**
+
+- Left sidebar lists all 17 providers grouped into **Global Providers**,
+  **China Providers**, and **Local / Self-hosted**.  A green dot appears next
+  to each provider as soon as it is configured; the "Next →" button shows a
+  live count of configured providers `(N)`.
+- Right panel updates instantly when a provider is selected and shows three
+  free-text fields:
+  - **API Key** — masked password input, toggle to reveal; hidden for local
+    providers (`Ollama`, `vLLM`).
+  - **Base URL (Endpoint)** — pre-filled with the provider's default, fully
+    editable for reverse-proxy / self-hosted / OpenAI-compatible deployments.
+  - **Model Identifier** — plain text input with a contextual placeholder
+    showing a typical model name (e.g. `claude-3-5-sonnet-20241022`).
+    No dropdown; users enter any model ID per the provider's docs.
+
+**Simplified model selector (`StepModel`)**
+
+`StepModel` now derives its option list directly from providers configured in
+step 1 — only providers that have both a configured key and a model name appear.
+No hardcoded catalogue; the global default is chosen from real user input.
+
+**Shared provider catalogue (`web/app/onboarding/providers.ts`)**
+
+New module exports `ProviderDef[]`, `ProviderConfig`, `ProvidersState`, and
+`isProviderConfigured()` — single source of truth used by both step components
+and `page.tsx`.
+
+### BYOM — Bring Your Own Model (17 providers)
+
+| Group | Providers |
+|---|---|
+| **Global (7)** | Anthropic (Claude) · OpenAI · Google Gemini · Mistral AI · Groq · xAI (Grok) · Together AI |
+| **China (8)** | DeepSeek · Alibaba Qwen（通义千问）· 智谱 GLM（Zhipu）· Moonshot/Kimi · 百度文心（ERNIE）· MiniMax · 零一万物（Yi）· 字节豆包（Doubao）|
+| **Local (3)** | Ollama · vLLM · Custom (any OpenAI-compatible endpoint) |
+
+Each entry ships with a pre-filled default Base URL and a suggested model
+placeholder, while remaining fully editable so any compatible API endpoint can
+be pointed at.
+
+### i18n Internationalisation
+
+- `web/lib/i18n/zh.ts` — Chinese (Simplified) translation source of truth;
+  exports `Translations` type.
+- `web/lib/i18n/en.ts` — English translations implementing the same type.
+- `web/lib/i18n/index.tsx` — `LocaleProvider` + `useT()` hook; auto-detects
+  browser language on mount (`navigator.language`), defaults to Chinese for
+  SSR hydration safety.
+- `web/components/Nav.tsx` — top nav with 中文 / EN toggle.
+- `web/components/Providers.tsx` — client-side wrapper enabling the server
+  component `layout.tsx` to stay a server component.
+- All 18 web components updated to consume `useT()` — zero hardcoded strings.
+
+### PII Sanitisation Middleware
+
+New `core_orchestrator/pii_sanitizer.py` provides composable regex-based PII
+redaction for use across any log or LLM result:
+
+```python
+from core_orchestrator import default_pipeline
+pipeline = default_pipeline()
+pipeline("Contact me at alice@example.com or +1-800-555-0100")
+# → "Contact me at [EMAIL_REDACTED] or [PHONE_REDACTED]"
+```
+
+- `sanitize_email` · `sanitize_phone` · `sanitize_id_card` · `sanitize_credit_card`
+- `compose(*sanitizers)` — functional pipeline builder
+- `default_pipeline()` — standard four-stage pipeline in safe execution order
+- 30 tests, all passing (mixed-language, boundary, idempotency, false-positive cases)
+
+### Database Setup Step
+
+Added `StepDatabase` to the onboarding wizard between API keys and model
+selection (Step 2 of 3).  If the user skips, a degraded-mode warning is shown.
+Backend: `POST /settings/test_db_connection` endpoint returns latency + `SELECT 1`
+verification without persisting credentials.
+
+### Other
+
+- Removed deprecated `getKey` i18n key from `onboarding.apiKeys` namespace
+  (replaced by `docsHint`).
+- `onboarding/page.tsx` data model: `apiKeys: Record<string, string>` →
+  `providers: ProvidersState`; `saveSettings()` decomposes into three separate
+  write paths: API keys dict, per-provider base URL overrides, per-provider
+  model names.
+
+---
+
 ## [0.7.0] — 2026-04-02
 
 ### Major Features

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
+import { useT } from "@/lib/i18n";
 
 interface Job {
   id: string;
@@ -17,6 +18,7 @@ interface Job {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const t = useT();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -71,14 +73,14 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">任务总览</h1>
-          <p className="text-slate-400 text-sm mt-1">监控所有 Agent 任务的实时状态</p>
+          <h1 className="text-2xl font-bold text-white">{t.dashboard.title}</h1>
+          <p className="text-slate-400 text-sm mt-1">{t.dashboard.subtitle}</p>
         </div>
         <Link
           href="/jobs/new"
           className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
         >
-          <span>＋</span> 新建任务
+          <span>＋</span> {t.dashboard.newJob}
         </Link>
       </div>
 
@@ -87,10 +89,10 @@ export default function DashboardPage() {
         <div className="grid grid-cols-4 gap-4">
           {(
             [
-              { label: "全部", filter: () => true, color: "text-slate-300" },
-              { label: "运行中", filter: (j: Job) => j.status === "running" || j.status === "waiting_approval", color: "text-blue-400" },
-              { label: "已完成", filter: (j: Job) => j.status === "completed", color: "text-green-400" },
-              { label: "失败/拒绝", filter: (j: Job) => j.status === "failed" || j.status === "rejected", color: "text-red-400" },
+              { label: t.dashboard.all, filter: () => true, color: "text-slate-300" },
+              { label: t.dashboard.running, filter: (j: Job) => j.status === "running" || j.status === "waiting_approval", color: "text-blue-400" },
+              { label: t.dashboard.completed, filter: (j: Job) => j.status === "completed", color: "text-green-400" },
+              { label: t.dashboard.failedRejected, filter: (j: Job) => j.status === "failed" || j.status === "rejected", color: "text-red-400" },
             ] as const
           ).map(({ label, filter, color }) => (
             <div key={label} className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
@@ -105,13 +107,13 @@ export default function DashboardPage() {
 
       {/* Job list */}
       {loading ? (
-        <div className="text-slate-400 text-center py-16">加载中…</div>
+        <div className="text-slate-400 text-center py-16">{t.dashboard.loading}</div>
       ) : jobs.length === 0 ? (
         <div className="text-center py-20 text-slate-500">
           <div className="text-4xl mb-4">📋</div>
-          <p className="text-lg">还没有任务</p>
+          <p className="text-lg">{t.dashboard.noJobs}</p>
           <p className="text-sm mt-2">
-            点击右上角「新建任务」开始你的第一个 AI 开发任务
+            {t.dashboard.noJobsHint}
           </p>
         </div>
       ) : (
@@ -126,7 +128,7 @@ export default function DashboardPage() {
                         #{job.id}
                       </span>
                       <span className="text-xs text-slate-400 uppercase tracking-wide">
-                        {job.type === "update" ? "🔄 更新" : "🚀 新建"}
+                        {job.type === "update" ? t.dashboard.typeUpdate : t.dashboard.typeNew}
                       </span>
                       <span className="text-xs text-slate-500">{job.workspace_id}</span>
                     </div>
@@ -134,7 +136,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <span className="text-xs text-slate-500">
-                      {job.event_count} 个事件
+                      {t.dashboard.events(job.event_count)}
                     </span>
                     <JobStatusBadge status={job.status} />
                   </div>

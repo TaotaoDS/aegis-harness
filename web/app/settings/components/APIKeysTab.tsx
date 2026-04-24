@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useT } from "@/lib/i18n";
 
 interface APIKeys {
   anthropic?: string;
@@ -9,6 +10,8 @@ interface APIKeys {
   deepseek?: string;
   zhipu?: string;
   moonshot?: string;
+  google?: string;
+  qwen?: string;
 }
 
 interface Props {
@@ -56,8 +59,22 @@ const PROVIDERS = [
     key: "moonshot" as keyof APIKeys,
     name: "Moonshot / Kimi",
     placeholder: "sk-…",
-    link: "https://platform.moonshot.cn",
+    link: "https://platform.moonshot.cn/console/api-keys",
     badge: "text-cyan-300 bg-cyan-900/30 border-cyan-700",
+  },
+  {
+    key: "google" as keyof APIKeys,
+    name: "Google Gemini",
+    placeholder: "AIzaSy…",
+    link: "https://aistudio.google.com/app/apikey",
+    badge: "text-blue-300 bg-blue-900/30 border-blue-700",
+  },
+  {
+    key: "qwen" as keyof APIKeys,
+    name: "Alibaba Qwen (通义千问)",
+    placeholder: "sk-…",
+    link: "https://dashscope.console.aliyun.com/apiKey",
+    badge: "text-orange-300 bg-orange-900/30 border-orange-700",
   },
 ];
 
@@ -66,6 +83,7 @@ function isMasked(val?: string): boolean {
 }
 
 export function APIKeysTab({ initial, onSave }: Props) {
+  const t = useT();
   // Each key starts as "" (user hasn't typed) so we don't accidentally
   // overwrite the masked placeholder that came from the server.
   const [form, setForm] = useState<APIKeys>({});
@@ -108,9 +126,9 @@ export function APIKeysTab({ initial, onSave }: Props) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-white mb-1">API Key 管理</h2>
+        <h2 className="text-lg font-semibold text-white mb-1">{t.apikeys.title}</h2>
         <p className="text-slate-400 text-sm">
-          Key 仅存储在服务端，页面仅展示末四位脱敏内容。更新后无需重启服务。
+          {t.apikeys.subtitle}
         </p>
       </div>
 
@@ -133,7 +151,7 @@ export function APIKeysTab({ initial, onSave }: Props) {
                   {p.name}
                 </span>
                 {isSet && (
-                  <div className="text-xs text-green-400 mt-1">✓ 已配置</div>
+                  <div className="text-xs text-green-400 mt-1">{t.apikeys.configured}</div>
                 )}
               </div>
 
@@ -152,7 +170,7 @@ export function APIKeysTab({ initial, onSave }: Props) {
                   onClick={() => toggle(p.key)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs"
                 >
-                  {isVisible ? "隐藏" : "显示"}
+                  {isVisible ? t.apikeys.hide : t.apikeys.show}
                 </button>
               </div>
 
@@ -162,7 +180,7 @@ export function APIKeysTab({ initial, onSave }: Props) {
                 rel="noopener noreferrer"
                 className="text-xs text-blue-400 hover:text-blue-300 shrink-0"
               >
-                申请 →
+                {t.apikeys.apply}
               </a>
             </div>
           );
@@ -179,10 +197,10 @@ export function APIKeysTab({ initial, onSave }: Props) {
               : "bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
           }`}
         >
-          {saving ? "保存中…" : saved ? "✓ 已保存" : "更新 Key"}
+          {saving ? t.apikeys.saving : saved ? t.apikeys.saved : t.apikeys.saveBtn}
         </button>
         <p className="text-xs text-slate-500">
-          仅填写需要更新的字段，空白字段将保留原值。
+          {t.apikeys.hint}
         </p>
       </div>
     </div>

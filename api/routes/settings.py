@@ -18,7 +18,8 @@ so the new active model takes effect on the next pipeline run (≤ 30 s).
 from __future__ import annotations
 
 import re
-from typing import Any, Dict
+import time
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -34,6 +35,10 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 class SettingValue(BaseModel):
     value: Any
+
+
+class DbTestRequest(BaseModel):
+    url: str
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +80,48 @@ def _mask_if_key(field_name: str, value: Any) -> Any:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@router.post("/test_db_connection")
+async def test_db_connection(body: DbTestRequest) -> Dict[str, Any]:
+    """Test a PostgreSQL URL without modifying the running engine.
+
+    Returns ``{"ok": bool, "latency_ms": float, "error": str | null}``.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    raw_url = body.url.strip()
+    if not raw_url:
+        raise HTTPException(status_code=422, detail="url is required")
+
+    # Normalise to asyncpg driver scheme
+    normalised = raw_url
+    for plain in ("postgresql://", "postgres://"):
+        if raw_url.startswith(plain):
+            normalised = "postgresql+asyncpg://" + raw_url[len(plain):]
+            break
+
+    engine = None
+    t0 = time.monotonic()
+    try:
+        engine = create_async_engine(
+            normalised,
+            echo=False,
+            pool_size=1,
+            max_overflow=0,
+            connect_args={"timeout": 10},
+        )
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        latency_ms = round((time.monotonic() - t0) * 1000, 1)
+        return {"ok": True, "latency_ms": latency_ms, "error": None}
+    except Exception as exc:  # noqa: BLE001
+        latency_ms = round((time.monotonic() - t0) * 1000, 1)
+        return {"ok": False, "latency_ms": latency_ms, "error": str(exc)}
+    finally:
+        if engine is not None:
+            await engine.dispose()
+
 
 @router.get("")
 async def list_settings() -> Dict[str, Any]:

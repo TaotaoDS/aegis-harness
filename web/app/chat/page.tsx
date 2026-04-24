@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { ChatInput } from "./components/ChatInput";
 import { MessageBubble, ChatMessage, MessageRole } from "./components/MessageBubble";
+import { useT } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,31 +36,15 @@ async function createJob(requirement: string): Promise<string> {
   return data.id as string;
 }
 
-/** Map SSE event type → human-readable chat system message */
-function eventToSystemMsg(type: string, data: Record<string, unknown>): string | null {
-  const map: Record<string, string> = {
-    "pipeline.phase_change":      `阶段变更 → ${data.phase ?? ""}`,
-    "pipeline.execution_start":   `开始执行 ${data.task_count ?? ""} 个任务…`,
-    "pipeline.execution_complete":`执行完成 ✓  通过 ${data.passed ?? 0}  升级 ${data.escalated ?? 0}`,
-    "ceo.interview_complete":     "需求收集完成，正在生成计划…",
-    "ceo.plan_complete":          "任务分解完成",
-    "pipeline.complete":          "✅ 任务完成！",
-    "pipeline.failed":            "❌ 任务失败",
-    "pipeline.rejected":          "⚠️ 任务被拒绝",
-    "evaluator.pass":             `评估通过 (${data.file_count ?? 0} 个文件)`,
-    "qa.pass":                    `QA 审核通过 (第 ${data.attempt ?? 1} 次)`,
-  };
-  return map[type] ?? null;
-}
-
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export default function ChatPage() {
+  const t = useT();
+
   const [messages, setMessages] = useState<ChatMessage[]>([
-    newMsg("bot",
-      "你好！我是 AegisHarness AI 助手。\n请告诉我您想要构建什么，我会帮您分析需求、制定计划并自动执行开发任务。"),
+    newMsg("bot", t.chat.greeting),
   ]);
   const [phase, setPhase]   = useState<Phase>("idle");
   const [jobId, setJobId]   = useState<string | null>(null);
@@ -77,6 +62,27 @@ export default function ChatPage() {
   const addMsg = useCallback((msg: ChatMessage) => {
     setMessages((prev) => [...prev, msg]);
   }, []);
+
+  // ── eventToSystemMsg — defined inside component to close over t ───────
+
+  function eventToSystemMsg(type: string, data: Record<string, unknown>): string | null {
+    const map: Record<string, string> = {
+      "pipeline.phase_change":       t.chat.phaseChange(String(data.phase ?? "")),
+      "pipeline.execution_start":    t.chat.executionStart((data.task_count as number) ?? 0),
+      "pipeline.execution_complete": t.chat.executionComplete(
+        (data.passed as number) ?? 0,
+        (data.escalated as number) ?? 0,
+      ),
+      "ceo.interview_complete":      t.chat.interviewComplete,
+      "ceo.plan_complete":           t.chat.planComplete,
+      "pipeline.complete":           t.chat.pipelineComplete,
+      "pipeline.failed":             t.chat.pipelineFailed,
+      "pipeline.rejected":           t.chat.pipelineRejected,
+      "evaluator.pass":              t.chat.evaluatorPass((data.file_count as number) ?? 0),
+      "qa.pass":                     t.chat.qaPass((data.attempt as number) ?? 1),
+    };
+    return map[type] ?? null;
+  }
 
   // ── Start SSE listener ─────────────────────────────────────────────────
 
@@ -102,7 +108,7 @@ export default function ChatPage() {
 
         // Architect writes a file
         if (type === "architect.file_written") {
-          addMsg(newMsg("system", `📄 生成文件: ${data.filepath ?? ""}`));
+          addMsg(newMsg("system", t.chat.fileGenerated(String(data.filepath ?? ""))));
           return;
         }
 
@@ -134,7 +140,8 @@ export default function ChatPage() {
         return prev;
       });
     };
-  }, [addMsg]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addMsg, t]);
 
   // ── Send handler (initial requirement) ────────────────────────────────
 
@@ -143,19 +150,19 @@ export default function ChatPage() {
 
     addMsg(newMsg("user", text));
     setPhase("creating");
-    addMsg(newMsg("system", "正在创建任务…"));
+    addMsg(newMsg("system", t.chat.creating));
 
     try {
       const id = await createJob(text);
       setJobId(id);
-      addMsg(newMsg("system", `任务已创建 (ID: ${id})，开始执行…`));
+      addMsg(newMsg("system", t.chat.created(id)));
       setPhase("streaming");
       startStreaming(id);
     } catch (err) {
-      addMsg(newMsg("system", `创建任务失败: ${String(err)}`));
+      addMsg(newMsg("system", t.chat.createFailed(String(err))));
       setPhase("error");
     }
-  }, [phase, addMsg, startStreaming]);
+  }, [phase, addMsg, startStreaming, t]);
 
   // ── Options click → treat as a follow-up message ──────────────────────
 
@@ -170,7 +177,7 @@ export default function ChatPage() {
   const handleRestart = () => {
     esRef.current?.close();
     setMessages([
-      newMsg("bot", "好的，让我们重新开始。请告诉我您想要构建什么？"),
+      newMsg("bot", t.chat.restart),
     ]);
     setPhase("idle");
     setJobId(null);
@@ -186,9 +193,9 @@ export default function ChatPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-4 shrink-0">
         <div>
-          <h1 className="text-xl font-bold text-white">AI 对话助手</h1>
+          <h1 className="text-xl font-bold text-white">{t.chat.title}</h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            描述您的需求，AI 将自动规划并执行开发任务
+            {t.chat.subtitle}
           </p>
         </div>
         {(phase === "done" || phase === "error") && (
@@ -197,7 +204,7 @@ export default function ChatPage() {
             className="text-sm px-4 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600
                        text-slate-200 transition-colors"
           >
-            新对话
+            {t.chat.newChat}
           </button>
         )}
         {jobId && (
@@ -205,7 +212,7 @@ export default function ChatPage() {
             href={`/jobs/${jobId}`}
             className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
           >
-            查看详情 →
+            {t.chat.viewDetails}
           </a>
         )}
       </div>
@@ -214,7 +221,7 @@ export default function ChatPage() {
       {phase === "streaming" && (
         <div className="flex items-center gap-2 text-xs text-violet-300 mb-3 shrink-0">
           <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
-          Agent 正在执行中…
+          {t.chat.agentRunning}
         </div>
       )}
 
@@ -234,11 +241,10 @@ export default function ChatPage() {
       <div className="shrink-0 pt-3">
         {phase === "done" ? (
           <div className="text-center text-sm text-slate-400 py-3">
-            任务已完成。点击「新对话」开始新任务，或{" "}
+            {t.chat.doneMsg}{" "}
             <a href={`/jobs/${jobId}`} className="text-blue-400 hover:underline">
-              查看执行详情
+              {t.chat.doneLink}
             </a>
-            。
           </div>
         ) : (
           <ChatInput
@@ -246,8 +252,8 @@ export default function ChatPage() {
             disabled={isInputDisabled}
             placeholder={
               phase === "idle"
-                ? "描述您想要构建的内容，例如：开发一个 REST API 服务器…"
-                : "Agent 执行中，请稍候…"
+                ? t.chat.placeholder
+                : t.chat.waitingPlaceholder
             }
           />
         )}

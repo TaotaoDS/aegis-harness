@@ -1,36 +1,39 @@
-const STATUS_CONFIG: Record<
-  string,
-  { label: string; className: string }
-> = {
-  pending: {
-    label: "等待中",
-    className: "bg-slate-700 text-slate-300",
-  },
-  running: {
-    label: "运行中",
-    className: "bg-blue-900/50 text-blue-300 animate-pulse",
-  },
-  waiting_approval: {
-    label: "等待审批",
-    className: "bg-yellow-900/50 text-yellow-300 animate-pulse",
-  },
-  completed: {
-    label: "已完成",
-    className: "bg-green-900/50 text-green-300",
-  },
-  failed: {
-    label: "已失败",
-    className: "bg-red-900/50 text-red-300",
-  },
-  rejected: {
-    label: "已拒绝",
-    className: "bg-orange-900/50 text-orange-300",
-  },
-};
+"use client";
 
-const FALLBACK = { label: "未知", className: "bg-slate-700 text-slate-400" };
+import { useT } from "@/lib/i18n";
 
 export function JobStatusBadge({ status }: { status: string }) {
+  const t = useT();
+
+  const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
+    pending: {
+      label: t.status.pending,
+      className: "bg-slate-700 text-slate-300",
+    },
+    running: {
+      label: t.status.running,
+      className: "bg-blue-900/50 text-blue-300 animate-pulse",
+    },
+    waiting_approval: {
+      label: t.status.waiting_approval,
+      className: "bg-yellow-900/50 text-yellow-300 animate-pulse",
+    },
+    completed: {
+      label: t.status.completed,
+      className: "bg-green-900/50 text-green-300",
+    },
+    failed: {
+      label: t.status.failed,
+      className: "bg-red-900/50 text-red-300",
+    },
+    rejected: {
+      label: t.status.rejected,
+      className: "bg-orange-900/50 text-orange-300",
+    },
+  };
+
+  const FALLBACK = { label: t.status.unknown, className: "bg-slate-700 text-slate-400" };
+
   const cfg = STATUS_CONFIG[status] ?? FALLBACK;
   return (
     <span

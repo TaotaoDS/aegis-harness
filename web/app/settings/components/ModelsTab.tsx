@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useT } from "@/lib/i18n";
 
 interface ModelEntry {
   provider: string;
@@ -30,6 +31,7 @@ const PROVIDER_ICONS: Record<string, string> = {
 };
 
 export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
+  const t = useT();
   const [models, setModels] = useState<Record<string, ModelEntry>>({});
   const [defaultModel, setDefaultModel] = useState(initialConfig.default_model ?? "");
   const [loading, setLoading] = useState(true);
@@ -67,19 +69,19 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-white mb-1">模型管理</h2>
+        <h2 className="text-lg font-semibold text-white mb-1">{t.models.title}</h2>
         <p className="text-slate-400 text-sm">
-          查看已配置的 LLM 列表并选择默认路由模型。切换后 ≤ 30 秒生效，无需重启服务。
+          {t.models.subtitle}
         </p>
       </div>
 
       {/* Default model selector */}
       <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
         <label className="block text-sm font-medium text-slate-300 mb-2">
-          🎯 默认路由模型
+          {t.models.defaultRoute}
         </label>
         {loading ? (
-          <div className="text-slate-500 text-sm">加载模型列表…</div>
+          <div className="text-slate-500 text-sm">{t.models.loadingModels}</div>
         ) : (
           <div className="flex items-center gap-3">
             <select
@@ -87,7 +89,7 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
               value={defaultModel}
               onChange={(e) => { setDefaultModel(e.target.value); setSaved(false); }}
             >
-              <option value="">— 使用 models_config.yaml 中的路由规则 —</option>
+              <option value="">{t.models.defaultOption}</option>
               {Object.entries(models).map(([name]) => (
                 <option key={name} value={name}>{name}</option>
               ))}
@@ -101,22 +103,22 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
                   : "bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
               }`}
             >
-              {saving ? "…" : saved ? "✓" : "应用"}
+              {saving ? "…" : saved ? "✓" : t.models.apply}
             </button>
           </div>
         )}
         <p className="text-xs text-slate-500 mt-2">
-          此选项覆盖 <code className="text-slate-400">models_config.yaml</code> 的路由规则，仅影响新任务。
+          {t.models.overrideHint}
         </p>
       </div>
 
       {/* Model list */}
       {loading ? (
-        <div className="text-slate-500 text-sm text-center py-8">加载中…</div>
+        <div className="text-slate-500 text-sm text-center py-8">{t.models.loading}</div>
       ) : Object.keys(models).length === 0 ? (
         <div className="text-center py-8 text-slate-500">
-          <p className="text-sm">无法从后端加载模型列表。</p>
-          <p className="text-xs mt-1">请确保 <code>GET /settings/model_runtime</code> 返回模型数据，或直接编辑 models_config.yaml。</p>
+          <p className="text-sm">{t.models.empty}</p>
+          <p className="text-xs mt-1">{t.models.emptyHint}</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -143,7 +145,7 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
                   )}
                   {name === defaultModel && (
                     <span className="text-xs px-1.5 py-0.5 rounded bg-blue-600 text-white font-medium">
-                      默认
+                      {t.models.default}
                     </span>
                   )}
                 </div>
@@ -158,7 +160,7 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
                 onClick={() => { setDefaultModel(name); setSaved(false); }}
                 className="text-xs text-slate-500 hover:text-blue-400 transition-colors shrink-0"
               >
-                设为默认
+                {t.models.setDefault}
               </button>
             </div>
           ))}
@@ -166,7 +168,7 @@ export function ModelsTab({ initialConfig, onSaveConfig }: Props) {
       )}
 
       <p className="text-xs text-slate-600">
-        添加或删除模型请直接编辑 <code className="text-slate-500">models_config.yaml</code>，服务会在 30 秒内自动感知变更。
+        {t.models.editHint}
       </p>
     </div>
   );

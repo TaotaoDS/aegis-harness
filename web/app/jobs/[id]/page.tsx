@@ -18,6 +18,7 @@ import {
   TERMINAL_EVENTS,
 } from "@/lib/eventLabels";
 import type { PendingApproval } from "@/hooks/useApproval";
+import { useT } from "@/lib/i18n";
 
 interface JobDetail {
   id: string;
@@ -34,6 +35,7 @@ interface JobDetail {
 export default function JobDetailPage() {
   const { id }  = useParams<{ id: string }>();
   const router  = useRouter();
+  const t = useT();
 
   const [job,      setJob]      = useState<JobDetail | null>(null);
   const [jobError, setJobError] = useState("");
@@ -53,7 +55,7 @@ export default function JobDetailPage() {
     const fetchJob = async () => {
       try {
         const res = await fetch(`/api/proxy/jobs/${id}`);
-        if (res.status === 404) { setJobError("找不到该任务"); return; }
+        if (res.status === 404) { setJobError(t.jobDetail.notFound); return; }
         if (!res.ok) return;
         const j: JobDetail = await res.json();
         setJob(j);
@@ -62,7 +64,7 @@ export default function JobDetailPage() {
           setPendingQuestion(j.pending_question);
         }
       } catch {
-        setJobError("无法连接到后端服务");
+        setJobError(t.jobDetail.backendError);
       }
     };
 
@@ -97,7 +99,7 @@ export default function JobDetailPage() {
       const d = latest.data as Record<string, unknown>;
       setApprovalPending({
         reason:          (d.reason          as string) ?? "unknown",
-        description:     (d.description     as string) ?? "请审批此操作",
+        description:     (d.description     as string) ?? "",
         files_to_modify: (d.files_to_modify as string[]) ?? undefined,
         requirement:     (d.requirement     as string) ?? undefined,
         filepath:        (d.filepath        as string) ?? undefined,
@@ -117,14 +119,14 @@ export default function JobDetailPage() {
         <div className="text-5xl mb-4">🔍</div>
         <p className="text-slate-400 text-lg">{jobError}</p>
         <Link href="/" className="mt-6 inline-block text-blue-400 hover:text-blue-300 text-sm">
-          ← 返回总览
+          {t.jobDetail.backToOverview}
         </Link>
       </div>
     );
   }
 
   if (!job) {
-    return <div className="max-w-3xl mx-auto text-center py-24 text-slate-400">加载中…</div>;
+    return <div className="max-w-3xl mx-auto text-center py-24 text-slate-400">{t.jobDetail.loading}</div>;
   }
 
   return (
@@ -146,7 +148,7 @@ export default function JobDetailPage() {
             onClick={() => router.push("/")}
             className="text-slate-500 hover:text-slate-300 text-sm transition-colors"
           >
-            ← 返回
+            {t.jobDetail.back}
           </button>
           <span className="text-slate-600">/</span>
           <span className="font-mono text-sm text-slate-400">#{id}</span>
@@ -155,11 +157,11 @@ export default function JobDetailPage() {
           <div className="flex-1 min-w-0">
             <h1 className="text-xl font-bold text-white leading-snug">{job.requirement}</h1>
             <div className="flex items-center gap-3 mt-2 text-xs text-slate-500">
-              <span>{job.type === "update" ? "🔄 迭代更新" : "🚀 全新构建"}</span>
+              <span>{job.type === "update" ? t.jobDetail.typeUpdate : t.jobDetail.typeNew}</span>
               <span>·</span>
               <span>workspace: {job.workspace_id}</span>
               <span>·</span>
-              <span>{new Date(job.created_at).toLocaleString("zh-CN")}</span>
+              <span>{new Date(job.created_at).toLocaleString()}</span>
             </div>
           </div>
           <JobStatusBadge status={finalStatus} />
@@ -171,12 +173,12 @@ export default function JobDetailPage() {
         {!done ? (
           <>
             <span className={`w-2 h-2 rounded-full live-dot ${connected ? "bg-green-500" : "bg-yellow-500"}`} />
-            <span className="text-slate-400">{connected ? "实时监控中…" : "重连中…"}</span>
+            <span className="text-slate-400">{connected ? t.jobDetail.liveMonitoring : t.jobDetail.reconnecting}</span>
           </>
         ) : (
           <>
             <span className="w-2 h-2 rounded-full bg-slate-600" />
-            <span className="text-slate-500">已完成 · 共 {events.length} 个事件</span>
+            <span className="text-slate-500">{t.jobDetail.completed(events.length)}</span>
           </>
         )}
       </div>
@@ -197,7 +199,7 @@ export default function JobDetailPage() {
 
       {/* ── Event timeline ────────────────────────────────────────────────── */}
       <div className="bg-slate-800/40 border border-slate-700 rounded-2xl p-5">
-        <h2 className="text-sm font-semibold text-slate-300 mb-4">执行日志</h2>
+        <h2 className="text-sm font-semibold text-slate-300 mb-4">{t.jobDetail.executionLog}</h2>
         <Timeline events={events} autoScroll={!done} />
       </div>
     </div>

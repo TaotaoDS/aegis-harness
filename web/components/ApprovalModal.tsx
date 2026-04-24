@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { PendingApproval } from "@/hooks/useApproval";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   pending: PendingApproval;
@@ -9,13 +10,14 @@ interface Props {
   onRespond: (approved: boolean, note?: string) => void;
 }
 
-const REASON_LABELS: Record<string, string> = {
-  update_mode:     "Update Mode — 修改现有代码",
-  sensitive_file:  "敏感文件写入",
-};
-
 export function ApprovalModal({ pending, submitting, onRespond }: Props) {
+  const t = useT();
   const [note, setNote] = useState("");
+
+  const REASON_LABELS: Record<string, string> = {
+    update_mode:    t.approval.update_mode,
+    sensitive_file: t.approval.sensitive_file,
+  };
 
   return (
     /* Full-screen backdrop — blocks all interaction underneath */
@@ -25,7 +27,7 @@ export function ApprovalModal({ pending, submitting, onRespond }: Props) {
         <div className="bg-yellow-600/10 border-b border-yellow-600/30 px-6 py-4 flex items-center gap-3">
           <span className="text-2xl">🔐</span>
           <div>
-            <h2 className="text-white font-semibold text-lg">需要您的批准</h2>
+            <h2 className="text-white font-semibold text-lg">{t.approval.title}</h2>
             <p className="text-yellow-400 text-sm">
               {REASON_LABELS[pending.reason] ?? pending.reason}
             </p>
@@ -41,7 +43,7 @@ export function ApprovalModal({ pending, submitting, onRespond }: Props) {
           {/* Requirement (Update Mode) */}
           {pending.requirement && (
             <div className="bg-slate-800 rounded-lg px-4 py-3">
-              <p className="text-xs text-slate-400 mb-1">变更需求</p>
+              <p className="text-xs text-slate-400 mb-1">{t.approval.changeReq}</p>
               <p className="text-slate-200 text-sm">{pending.requirement}</p>
             </div>
           )}
@@ -49,7 +51,7 @@ export function ApprovalModal({ pending, submitting, onRespond }: Props) {
           {/* Sensitive filepath */}
           {pending.filepath && (
             <div className="bg-slate-800 rounded-lg px-4 py-3">
-              <p className="text-xs text-slate-400 mb-1">目标文件</p>
+              <p className="text-xs text-slate-400 mb-1">{t.approval.targetFile}</p>
               <p className="font-mono text-yellow-300 text-sm">{pending.filepath}</p>
             </div>
           )}
@@ -57,7 +59,7 @@ export function ApprovalModal({ pending, submitting, onRespond }: Props) {
           {/* Files to modify (Update Mode list) */}
           {pending.files_to_modify && pending.files_to_modify.length > 0 && (
             <div className="bg-slate-800 rounded-lg px-4 py-3">
-              <p className="text-xs text-slate-400 mb-2">将修改以下文件</p>
+              <p className="text-xs text-slate-400 mb-2">{t.approval.filesToModify}</p>
               <ul className="space-y-1">
                 {pending.files_to_modify.map((f) => (
                   <li key={f} className="font-mono text-xs text-slate-300 flex items-center gap-2">
@@ -71,13 +73,13 @@ export function ApprovalModal({ pending, submitting, onRespond }: Props) {
           {/* Optional rejection note */}
           <div>
             <label className="block text-xs text-slate-400 mb-1">
-              备注（可选，拒绝时建议填写原因）
+              {t.approval.noteLabel}
             </label>
             <input
               type="text"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="例如：请先备份数据库…"
+              placeholder={t.approval.notePlaceholder}
               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-blue-500 transition-colors"
             />
           </div>
@@ -90,14 +92,14 @@ export function ApprovalModal({ pending, submitting, onRespond }: Props) {
             disabled={submitting}
             className="flex-1 py-2.5 rounded-xl border border-red-700 text-red-400 hover:bg-red-900/20 disabled:opacity-40 transition-colors text-sm font-medium"
           >
-            {submitting ? "处理中…" : "❌ 拒绝"}
+            {submitting ? t.approval.processing : t.approval.reject}
           </button>
           <button
             onClick={() => onRespond(true, note)}
             disabled={submitting}
             className="flex-1 py-2.5 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white transition-colors text-sm font-medium"
           >
-            {submitting ? "处理中…" : "✅ 批准执行"}
+            {submitting ? t.approval.processing : t.approval.approve}
           </button>
         </div>
       </div>

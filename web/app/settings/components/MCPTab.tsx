@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useT } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +66,7 @@ const STATUS_ICON: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 export function MCPTab({ initial, onSave }: Props) {
+  const t = useT();
   const [servers, setServers]   = useState<MCPServer[]>(initial);
   const [newName, setNewName]   = useState("");
   const [newUrl, setNewUrl]     = useState("");
@@ -88,7 +90,7 @@ export function MCPTab({ initial, onSave }: Props) {
   // Add server
   const handleAdd = async () => {
     if (!newName.trim() || !newUrl.trim()) {
-      flash("名称和 URL 不能为空", true); return;
+      flash(t.mcp.emptyError, true); return;
     }
     setAdding(true);
     try {
@@ -97,9 +99,9 @@ export function MCPTab({ initial, onSave }: Props) {
       });
       setNewName(""); setNewUrl(""); setNewDesc("");
       await refresh();
-      flash("服务器已添加");
+      flash(t.mcp.addSuccess);
     } catch (e) {
-      flash(`添加失败: ${String(e)}`, true);
+      flash(t.mcp.addFailed(String(e)), true);
     } finally {
       setAdding(false);
     }
@@ -110,9 +112,9 @@ export function MCPTab({ initial, onSave }: Props) {
     try {
       await apiDelete(`mcp/servers/${id}`);
       await refresh();
-      flash("已删除");
+      flash(t.mcp.deleteSuccess);
     } catch (e) {
-      flash(`删除失败: ${String(e)}`, true);
+      flash(t.mcp.deleteFailed(String(e)), true);
     }
   };
 
@@ -123,12 +125,12 @@ export function MCPTab({ initial, onSave }: Props) {
       const result = await apiPost(`mcp/servers/${id}/probe`, {});
       await refresh();
       if (result.status === "connected") {
-        flash(`连接成功，发现 ${result.tool_count ?? 0} 个工具`);
+        flash(t.mcp.probeSuccess(result.tool_count ?? 0));
       } else {
-        flash(`连接失败: ${result.error ?? "unknown"}`, true);
+        flash(t.mcp.probeFailed(result.error ?? "unknown"), true);
       }
     } catch (e) {
-      flash(`探测失败: ${String(e)}`, true);
+      flash(t.mcp.probeError(String(e)), true);
     } finally {
       setProbingId(null);
     }
@@ -138,9 +140,9 @@ export function MCPTab({ initial, onSave }: Props) {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-base font-semibold text-white">MCP 工具服务器</h2>
+        <h2 className="text-base font-semibold text-white">{t.mcp.title}</h2>
         <p className="text-slate-400 text-xs mt-1">
-          挂载外部 MCP 服务器，让 Agent 可以调用自定义工具（文件系统、搜索、数据库等）。
+          {t.mcp.subtitle}
         </p>
       </div>
 
@@ -150,21 +152,21 @@ export function MCPTab({ initial, onSave }: Props) {
 
       {/* Add new server */}
       <div className="bg-slate-700/30 border border-slate-600 rounded-xl p-4 space-y-3">
-        <h3 className="text-sm font-medium text-slate-200">添加新服务器</h3>
+        <h3 className="text-sm font-medium text-slate-200">{t.mcp.addServer}</h3>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-slate-400 mb-1 block">名称 *</label>
+            <label className="text-xs text-slate-400 mb-1 block">{t.mcp.nameLabel}</label>
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="例如：文件系统工具"
+              placeholder={t.mcp.namePlaceholder}
               className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2
                          text-sm text-slate-100 placeholder-slate-500 focus:outline-none
                          focus:border-blue-500"
             />
           </div>
           <div>
-            <label className="text-xs text-slate-400 mb-1 block">服务器 URL *</label>
+            <label className="text-xs text-slate-400 mb-1 block">{t.mcp.urlLabel}</label>
             <input
               value={newUrl}
               onChange={(e) => setNewUrl(e.target.value)}
@@ -176,11 +178,11 @@ export function MCPTab({ initial, onSave }: Props) {
           </div>
         </div>
         <div>
-          <label className="text-xs text-slate-400 mb-1 block">描述（可选）</label>
+          <label className="text-xs text-slate-400 mb-1 block">{t.mcp.descLabel}</label>
           <input
             value={newDesc}
             onChange={(e) => setNewDesc(e.target.value)}
-            placeholder="此服务器提供什么功能？"
+            placeholder={t.mcp.descPlaceholder}
             className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2
                        text-sm text-slate-100 placeholder-slate-500 focus:outline-none
                        focus:border-blue-500"
@@ -192,14 +194,14 @@ export function MCPTab({ initial, onSave }: Props) {
           className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700
                      disabled:text-slate-500 text-white text-sm rounded-lg transition-colors"
         >
-          {adding ? "添加中…" : "+ 添加服务器"}
+          {adding ? t.mcp.adding : t.mcp.addBtn}
         </button>
       </div>
 
       {/* Server list */}
       {servers.length === 0 ? (
         <div className="text-center text-slate-500 text-sm py-8">
-          暂无已注册的 MCP 服务器。添加第一个服务器以开始使用。
+          {t.mcp.empty}
         </div>
       ) : (
         <div className="space-y-3">
@@ -217,7 +219,7 @@ export function MCPTab({ initial, onSave }: Props) {
                     <span className="text-sm font-medium text-white truncate">{srv.name}</span>
                     {!srv.enabled && (
                       <span className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded">
-                        已禁用
+                        {t.mcp.disabled}
                       </span>
                     )}
                   </div>
@@ -230,18 +232,18 @@ export function MCPTab({ initial, onSave }: Props) {
                   )}
                   {srv.tools.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1">
-                      {srv.tools.slice(0, 8).map((t, i) => (
+                      {srv.tools.slice(0, 8).map((tool, i) => (
                         <span
                           key={i}
                           className="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded"
-                          title={t.description ?? ""}
+                          title={tool.description ?? ""}
                         >
-                          {t.name}
+                          {tool.name}
                         </span>
                       ))}
                       {srv.tools.length > 8 && (
                         <span className="text-xs text-slate-500">
-                          +{srv.tools.length - 8} 更多
+                          {t.mcp.more(srv.tools.length - 8)}
                         </span>
                       )}
                     </div>
@@ -255,14 +257,14 @@ export function MCPTab({ initial, onSave }: Props) {
                     className="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600
                                text-slate-300 disabled:text-slate-500 transition-colors"
                   >
-                    {probingId === srv.id ? "探测中…" : "探测连接"}
+                    {probingId === srv.id ? t.mcp.probing : t.mcp.probe}
                   </button>
                   <button
                     onClick={() => handleRemove(srv.id)}
                     className="text-xs px-3 py-1.5 rounded-lg bg-red-900/30 hover:bg-red-900/50
                                text-red-400 border border-red-800/50 transition-colors"
                   >
-                    删除
+                    {t.mcp.delete}
                   </button>
                 </div>
               </div>

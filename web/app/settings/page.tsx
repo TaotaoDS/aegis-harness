@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useT } from "@/lib/i18n";
 import { ProfileTab, UserProfile } from "./components/ProfileTab";
 import { CEOTab } from "./components/CEOTab";
 import { APIKeysTab } from "./components/APIKeysTab";
@@ -13,13 +14,13 @@ import { MCPTab } from "./components/MCPTab";
 
 type TabKey = "profile" | "ceo" | "apikeys" | "models" | "mcp";
 
-const TABS: { key: TabKey; label: string; icon: string }[] = [
-  { key: "profile", label: "用户画像",    icon: "👤" },
-  { key: "ceo",     label: "CEO 配置",    icon: "🤖" },
-  { key: "apikeys", label: "API Key",     icon: "🔑" },
-  { key: "models",  label: "模型",        icon: "⚡" },
-  { key: "mcp",     label: "MCP 工具",    icon: "🔧" },
-];
+const TAB_ICONS: Record<TabKey, string> = {
+  profile: "👤",
+  ceo:     "🤖",
+  apikeys: "🔑",
+  models:  "⚡",
+  mcp:     "🔧",
+};
 
 const EMPTY_PROFILE: UserProfile = {
   name: "",
@@ -59,6 +60,7 @@ async function apiPut(key: string, value: unknown) {
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
+  const t = useT();
   const [activeTab, setActiveTab] = useState<TabKey>("profile");
   const [loading, setLoading] = useState(true);
 
@@ -92,36 +94,44 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-64">
-        <div className="text-slate-400 text-sm">加载设置中…</div>
+        <div className="text-slate-400 text-sm">{t.settings.loading}</div>
       </div>
     );
   }
+
+  const TABS: { key: TabKey; label: string; icon: string }[] = (
+    Object.keys(TAB_ICONS) as TabKey[]
+  ).map((key) => ({
+    key,
+    label: t.settings.tabs[key],
+    icon: TAB_ICONS[key],
+  }));
 
   return (
     <div className="max-w-4xl">
       {/* Page header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white">系统设置</h1>
+        <h1 className="text-2xl font-bold text-white">{t.settings.title}</h1>
         <p className="text-slate-400 text-sm mt-1">
-          配置 Agent 行为、用户画像、API 凭证和模型路由。所有设置持久化到数据库，无需重启服务。
+          {t.settings.subtitle}
         </p>
       </div>
 
       <div className="flex gap-8">
         {/* Sidebar tabs */}
         <nav className="w-44 shrink-0 space-y-1">
-          {TABS.map((t) => (
+          {TABS.map((tab) => (
             <button
-              key={t.key}
-              onClick={() => setActiveTab(t.key)}
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
               className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                activeTab === t.key
+                activeTab === tab.key
                   ? "bg-blue-600/20 text-blue-300 border border-blue-500/30"
                   : "text-slate-400 hover:text-white hover:bg-slate-800"
               }`}
             >
-              <span>{t.icon}</span>
-              <span>{t.label}</span>
+              <span>{tab.icon}</span>
+              <span>{tab.label}</span>
             </button>
           ))}
         </nav>

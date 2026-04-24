@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useT } from "@/lib/i18n";
 
 export default function NewJobPage() {
   const router = useRouter();
+  const t = useT();
   const [form, setForm] = useState({
     type: "build",
     workspace_id: "default",
@@ -16,7 +18,7 @@ export default function NewJobPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.requirement.trim()) {
-      setError("请输入需求描述");
+      setError(t.jobNew.errorEmpty);
       return;
     }
     setLoading(true);
@@ -31,14 +33,14 @@ export default function NewJobPage() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data?.detail || `请求失败 (${res.status})`);
+        setError(data?.detail || t.jobNew.errorRequest(res.status));
         return;
       }
 
       const job = await res.json();
       router.push(`/jobs/${job.id}`);
     } catch (err) {
-      setError("网络错误，请检查后端服务是否启动（port 8000）");
+      setError(t.jobNew.errorNetwork);
     } finally {
       setLoading(false);
     }
@@ -47,19 +49,19 @@ export default function NewJobPage() {
   return (
     <div className="max-w-2xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white">新建任务</h1>
-        <p className="text-slate-400 text-sm mt-1">描述你的需求，Agent 团队将自动完成开发</p>
+        <h1 className="text-2xl font-bold text-white">{t.jobNew.title}</h1>
+        <p className="text-slate-400 text-sm mt-1">{t.jobNew.subtitle}</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Type selector */}
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-3">任务类型</label>
+          <label className="block text-sm font-medium text-slate-300 mb-3">{t.jobNew.taskType}</label>
           <div className="grid grid-cols-2 gap-3">
             {(
               [
-                { value: "build", icon: "🚀", title: "全新构建", desc: "从零开始构建新项目" },
-                { value: "update", icon: "🔄", title: "迭代更新", desc: "在现有项目基础上修改" },
+                { value: "build", icon: "🚀", title: t.jobNew.buildTitle, desc: t.jobNew.buildDesc },
+                { value: "update", icon: "🔄", title: t.jobNew.updateTitle, desc: t.jobNew.updateDesc },
               ] as const
             ).map(({ value, icon, title, desc }) => (
               <button
@@ -83,7 +85,7 @@ export default function NewJobPage() {
         {/* Workspace ID */}
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">
-            工作区 ID
+            {t.jobNew.workspaceId}
           </label>
           <input
             type="text"
@@ -93,22 +95,22 @@ export default function NewJobPage() {
             className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-blue-500 transition-colors"
           />
           <p className="text-xs text-slate-500 mt-1">
-            相同 workspace_id 可让 Update Mode 操作同一套代码文件
+            {t.jobNew.workspaceHint}
           </p>
         </div>
 
         {/* Requirement */}
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">
-            需求描述
+            {t.jobNew.requirement}
           </label>
           <textarea
             value={form.requirement}
             onChange={(e) => setForm((f) => ({ ...f, requirement: e.target.value }))}
             placeholder={
               form.type === "update"
-                ? "例如：将登录按钮颜色改为蓝色，并修复表单提交时的 XSS 漏洞"
-                : "例如：构建一个带用户认证的 REST API，使用 FastAPI + PostgreSQL"
+                ? t.jobNew.placeholderUpdate
+                : t.jobNew.placeholderBuild
             }
             rows={5}
             className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 text-sm focus:outline-none focus:border-blue-500 transition-colors resize-none"
@@ -128,11 +130,11 @@ export default function NewJobPage() {
         >
           {loading ? (
             <>
-              <span className="animate-spin">⟳</span> 提交中…
+              <span className="animate-spin">⟳</span> {t.jobNew.submitting}
             </>
           ) : (
             <>
-              <span>▶</span> 启动任务
+              <span>▶</span> {t.jobNew.submit}
             </>
           )}
         </button>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useT } from "@/lib/i18n";
 
 export interface UserProfile {
   name: string;
@@ -10,26 +11,11 @@ export interface UserProfile {
   notes: string;
 }
 
-const TECH_LEVELS = [
-  {
-    value: "technical",
-    label: "技术型",
-    badge: "bg-blue-900/50 text-blue-300 border-blue-700",
-    desc: "工程师 / 开发者，全量技术词汇",
-  },
-  {
-    value: "semi_technical",
-    label: "半技术型",
-    badge: "bg-yellow-900/50 text-yellow-300 border-yellow-700",
-    desc: "产品 / 设计 / 分析师，轻技术术语",
-  },
-  {
-    value: "non_technical",
-    label: "非技术型",
-    badge: "bg-purple-900/50 text-purple-300 border-purple-700",
-    desc: "业务方 / 创业者，纯大白话 + 选项引导",
-  },
-];
+const TECH_LEVEL_BADGES = {
+  technical:     "bg-blue-900/50 text-blue-300 border-blue-700",
+  semi_technical: "bg-yellow-900/50 text-yellow-300 border-yellow-700",
+  non_technical:  "bg-purple-900/50 text-purple-300 border-purple-700",
+};
 
 interface Props {
   initial: UserProfile;
@@ -37,9 +23,36 @@ interface Props {
 }
 
 export function ProfileTab({ initial, onSave }: Props) {
+  const t = useT();
   const [form, setForm] = useState<UserProfile>(initial);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const TECH_LEVELS: {
+    value: "technical" | "semi_technical" | "non_technical";
+    label: string;
+    badge: string;
+    desc: string;
+  }[] = [
+    {
+      value: "technical",
+      label: t.profile.technical,
+      badge: TECH_LEVEL_BADGES.technical,
+      desc: t.profile.technicalDesc,
+    },
+    {
+      value: "semi_technical",
+      label: t.profile.semiTechnical,
+      badge: TECH_LEVEL_BADGES.semi_technical,
+      desc: t.profile.semiTechnicalDesc,
+    },
+    {
+      value: "non_technical",
+      label: t.profile.nonTechnical,
+      badge: TECH_LEVEL_BADGES.non_technical,
+      desc: t.profile.nonTechnicalDesc,
+    },
+  ];
 
   const update = (key: keyof UserProfile, val: string) => {
     setForm((f) => ({ ...f, [key]: val }));
@@ -60,9 +73,9 @@ export function ProfileTab({ initial, onSave }: Props) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-white mb-1">用户背景画像</h2>
+        <h2 className="text-lg font-semibold text-white mb-1">{t.profile.title}</h2>
         <p className="text-slate-400 text-sm">
-          CEO Agent 将在每次任务开始时读取此配置，自动调整沟通策略。
+          {t.profile.subtitle}
         </p>
       </div>
 
@@ -70,24 +83,24 @@ export function ProfileTab({ initial, onSave }: Props) {
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-1">
-            姓名
+            {t.profile.name}
           </label>
           <input
             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
             value={form.name}
             onChange={(e) => update("name", e.target.value)}
-            placeholder="你的名字"
+            placeholder={t.profile.namePlaceholder}
           />
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-1">
-            职位 / 角色
+            {t.profile.role}
           </label>
           <input
             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
             value={form.role}
             onChange={(e) => update("role", e.target.value)}
-            placeholder="e.g. Product Manager, CTO, 创始人"
+            placeholder={t.profile.rolePlaceholder}
           />
         </div>
       </div>
@@ -95,7 +108,7 @@ export function ProfileTab({ initial, onSave }: Props) {
       {/* Technical level */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
-          技术水平
+          {t.profile.techLevel}
         </label>
         <div className="grid grid-cols-3 gap-3">
           {TECH_LEVELS.map((lvl) => (
@@ -122,35 +135,35 @@ export function ProfileTab({ initial, onSave }: Props) {
       {/* Language */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1">
-          首选语言
+          {t.profile.language}
         </label>
         <select
           className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
           value={form.language}
           onChange={(e) => update("language", e.target.value)}
         >
-          <option value="auto">自动检测（推荐）</option>
-          <option value="zh">中文</option>
+          <option value="auto">{t.profile.langAuto}</option>
+          <option value="zh">{t.profile.langZh}</option>
           <option value="en">English</option>
           <option value="ja">日本語</option>
           <option value="ko">한국어</option>
         </select>
         <p className="text-xs text-slate-500 mt-1">
-          "自动检测"让 CEO 根据你的需求描述自动识别并使用相同语言回复。
+          {t.profile.langHint}
         </p>
       </div>
 
       {/* Notes */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1">
-          背景备注（可选）
+          {t.profile.notes}
         </label>
         <textarea
           className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-none"
           rows={3}
           value={form.notes}
           onChange={(e) => update("notes", e.target.value)}
-          placeholder="任何对 CEO 有帮助的背景信息，例如：我们是一个 B2B SaaS 公司，主要客户是中小型制造企业…"
+          placeholder={t.profile.notesPlaceholder}
         />
       </div>
 
@@ -163,7 +176,7 @@ export function ProfileTab({ initial, onSave }: Props) {
             : "bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
         }`}
       >
-        {saving ? "保存中…" : saved ? "✓ 已保存" : "保存画像"}
+        {saving ? t.profile.saving : saved ? t.profile.saved : t.profile.saveBtn}
       </button>
     </div>
   );

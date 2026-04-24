@@ -1,7 +1,7 @@
 # AegisHarness
 
-> **v0.0.1** — Multi-Agent Code Generation & Orchestration Platform  
-> 598 tests passing · PostgreSQL + pgvector · Kahn BFS Wave Scheduler · SSE Streaming Chat UI · MCP Dynamic Tool Manager
+> **v0.0.2** — Multi-Agent Code Generation & Orchestration Platform  
+> 598 tests passing · 17-provider BYOM · i18n (zh/en) · PostgreSQL + pgvector · Kahn BFS Wave Scheduler · SSE Streaming Chat UI · MCP Dynamic Tool Manager
 
 ---
 
@@ -95,6 +95,44 @@ For the full design reference see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ---
 
+## What's New in v0.0.2
+
+### BYOM — Bring Your Own Model (17 providers)
+
+The first-run onboarding wizard now supports any LLM provider through a
+two-panel UI: select a provider on the left, fill in **API Key**, **Base URL**,
+and **Model Identifier** on the right. No dropdown menus — enter any model ID
+exactly as it appears in the provider's documentation.
+
+| Group | Providers |
+|---|---|
+| **Global** | Anthropic · OpenAI · Google Gemini · Mistral AI · Groq · xAI (Grok) · Together AI |
+| **China** | DeepSeek · Alibaba Qwen · 智谱 GLM · Moonshot/Kimi · 百度文心 · MiniMax · 零一万物 · 字节豆包 |
+| **Local** | Ollama · vLLM · Custom (any OpenAI-compatible endpoint) |
+
+For local providers (`Ollama`, `vLLM`) the API Key field is hidden — only the
+endpoint URL and model name are required.
+
+### i18n — Automatic Language Detection
+
+The entire web console now switches between **Chinese (Simplified)** and
+**English** based on `navigator.language`, with a manual 中文 / EN toggle in
+the top navigation bar.
+
+### PII Sanitisation Middleware
+
+```python
+from core_orchestrator import default_pipeline
+safe = default_pipeline()
+safe("Reach me at bob@corp.com or 138-0000-0000")
+# → "Reach me at [EMAIL_REDACTED] or [PHONE_REDACTED]"
+```
+
+Composable pipeline covering email, phone (CN + US + international), Chinese ID
+cards, and credit-card numbers. 30 tests, all passing.
+
+---
+
 ## Core Infrastructure (v0.0.1)
 
 ### 1. PostgreSQL + pgvector Semantic Search
@@ -180,15 +218,36 @@ The Architect → QA loop has three escalation layers:
 ### API Keys (`.env`)
 
 ```bash
-# LLM providers (at least one required)
+# ── Global providers (at least one required) ──────────────────────────────
 ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=sk-proj-...
+GOOGLE_API_KEY=AIzaSy...
+MISTRAL_API_KEY=...
+GROQ_API_KEY=gsk_...
+XAI_API_KEY=xai-...
+TOGETHER_API_KEY=...
 
-# For NVIDIA NIM, DeepSeek, Zhipu, Moonshot — see .env.example
+# ── China providers ────────────────────────────────────────────────────────
+DEEPSEEK_API_KEY=sk-...
+DASHSCOPE_API_KEY=sk-...        # Alibaba Qwen / 通义千问
+ZHIPUAI_API_KEY=...             # 智谱 GLM
+MOONSHOT_API_KEY=sk-...         # Moonshot / Kimi
+BAIDU_API_KEY=...               # 百度文心 ERNIE
+MINIMAX_API_KEY=...
+YI_API_KEY=...                  # 零一万物
+ARK_API_KEY=...                 # 字节豆包 Doubao
 
-# PostgreSQL (optional — omit for file-only mode)
+# ── Local providers: no key needed — configure Base URL in the wizard ──────
+# Ollama default: http://localhost:11434/v1
+# vLLM  default: http://localhost:8000/v1
+
+# ── PostgreSQL (optional — omit for file-only mode) ───────────────────────
 DATABASE_URL=postgresql://harness:harness_secret@localhost:5432/harness
 ```
+
+> **Tip**: You can configure all of the above through the first-run wizard
+> at `/onboarding` — keys are stored only in your local database and are
+> never sent to any third-party server.
 
 ### Model Routing (`models_config.yaml`)
 
@@ -222,12 +281,13 @@ All settings persist to the database — no restart required:
 ## Project Structure
 
 ```
-enterprise-harness/           ← repo root (project: AegisHarness v0.0.1)
+enterprise-harness/           ← repo root (project: AegisHarness v0.0.2)
 ├── core_orchestrator/        ← business logic (pure Python)
 │   ├── ceo_agent.py          ← requirements interview + planning
 │   ├── resilience_manager.py ← 3-layer escalation + wave execution
 │   ├── parallel_executor.py  ← Kahn BFS + ThreadPoolExecutor
 │   ├── retry_utils.py        ← exponential backoff (tenacity)
+│   ├── pii_sanitizer.py      ← composable PII redaction middleware (NEW)
 │   ├── vector_store.py       ← OpenAI embeddings + cosine search
 │   ├── solution_store.py     ← YAML lessons + semantic bridge
 │   ├── mcp_manager.py        ← MCP server registry
@@ -240,13 +300,20 @@ enterprise-harness/           ← repo root (project: AegisHarness v0.0.1)
 │   ├── repository.py         ← async CRUD
 │   └── migrations/           ← Alembic revisions
 ├── web/                      ← Next.js 14 frontend
+│   ├── lib/i18n/             ← zh.ts + en.ts + React context (NEW)
+│   ├── components/
+│   │   ├── Nav.tsx           ← top nav with zh/en toggle (NEW)
+│   │   └── Providers.tsx     ← LocaleProvider client wrapper (NEW)
 │   └── app/
 │       ├── chat/             ← SSE streaming chat UI
+│       ├── onboarding/
+│       │   ├── providers.ts  ← 17-provider catalogue + types (NEW)
+│       │   └── components/   ← StepWelcome/APIKeys/Database/Model/Done
 │       └── settings/         ← 5-tab settings panel
 ├── Dockerfile                ← backend multi-stage image
 ├── docker-compose.yml        ← postgres + backend + frontend
-├── ARCHITECTURE.md           ← full system design reference (v0.0.1)
-└── AGENTS.md                 ← agent operating manual (v0.0.1)
+├── ARCHITECTURE.md           ← full system design reference
+└── AGENTS.md                 ← agent operating manual
 ```
 
 ---
@@ -266,7 +333,7 @@ python -m pytest core_orchestrator/tests/test_resilience_manager.py -v
 python -m pytest core_orchestrator/tests/ --cov=core_orchestrator --cov-report=term-missing
 ```
 
-**Current**: **598 tests, all passing** (AegisHarness v0.0.1).
+**Current**: **598 tests, all passing** (AegisHarness v0.0.2).
 
 ### Database Migrations
 

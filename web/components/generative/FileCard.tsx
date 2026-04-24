@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   data: Record<string, unknown>;
@@ -34,6 +35,7 @@ function langFromPath(filepath: string): string {
  * Supports expanding to preview the first ~30 lines of content.
  */
 export function FileCard({ data }: Props) {
+  const t = useT();
   const filepath = (data.filepath as string) ?? "unknown";
   const content  = (data.content  as string) ?? "";
   const lang     = langFromPath(filepath);
@@ -61,7 +63,7 @@ export function FileCard({ data }: Props) {
               onClick={() => setExpanded((v) => !v)}
               className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
             >
-              {expanded ? "收起" : "预览"}
+              {expanded ? t.components.fileCard.collapse : t.components.fileCard.preview}
             </button>
           )}
         </div>
@@ -72,7 +74,7 @@ export function FileCard({ data }: Props) {
         <pre className="bg-slate-900 text-slate-300 text-xs p-3 overflow-x-auto max-h-64 overflow-y-auto leading-relaxed">
           {preview}
           {hasMore && (
-            <span className="text-slate-500 block mt-1">…（更多内容已省略）</span>
+            <span className="text-slate-500 block mt-1">{t.components.fileCard.truncated}</span>
           )}
         </pre>
       )}
