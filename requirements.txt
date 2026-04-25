@@ -45,5 +45,24 @@ tenacity>=8.2.0          # retry decorator (with_retry in retry_utils.py)
 # Note: embeddings are stored as JSONB arrays; cosine similarity computed in Python.
 # No hard dependency needed — VectorStore degrades gracefully without pgvector.
 
+# =============================================================================
+# v0.1.0 — Multi-tenancy & Auth (Task ④)
+# =============================================================================
+
+# JWT creation and validation (access + refresh tokens)
+python-jose[cryptography]>=3.3.0
+
+# Password hashing (bcrypt)
+passlib[bcrypt]>=1.7.4
+
+# Fernet symmetric encryption for stored API keys (optional, recommended)
+cryptography>=42.0
+
+# Rate limiting for auth endpoints
+slowapi>=0.1.9
+
+# Email validation (used by Pydantic EmailStr in auth routes)
+email-validator>=2.0.0
+
 # Testing
 pytest>=8.0.0           # Test runner

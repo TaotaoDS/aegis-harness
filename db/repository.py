@@ -22,7 +22,17 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import CheckpointModel, EventModel, JobModel, SettingModel, SolutionModel
+from .models import (
+    CheckpointModel,
+    EventModel,
+    JobModel,
+    RefreshTokenModel,
+    SettingModel,
+    SolutionModel,
+    TenantModel,
+    UserModel,
+    WorkspaceModel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +238,193 @@ async def load_solutions_by_workspace(
             "tags":        row.tags or [],
             "job_id":      row.job_id or "",
             "timestamp":   row.timestamp or "",
+        }
+        for row in rows
+    ]
+
+
+# ===========================================================================
+# v0.1.0 — Tenant-scoped repository helpers
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Tenant
+# ---------------------------------------------------------------------------
+
+async def get_tenant_by_id(
+    session: AsyncSession, tenant_id: str
+) -> Optional[Dict[str, Any]]:
+    result = await session.execute(
+        select(TenantModel).where(TenantModel.id == tenant_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    return {"id": row.id, "slug": row.slug, "name": row.name,
+            "plan": row.plan, "is_active": row.is_active}
+
+
+# ---------------------------------------------------------------------------
+# User
+# ---------------------------------------------------------------------------
+
+async def get_user_by_id(
+    session: AsyncSession, user_id: str
+) -> Optional[Dict[str, Any]]:
+    result = await session.execute(
+        select(UserModel).where(UserModel.id == str(user_id))
+    )
+    row = result.scalar_one_or_none()
+    return _user_row_to_dict(row)
+
+
+async def get_user_by_email(
+    session: AsyncSession, email: str
+) -> Optional[Dict[str, Any]]:
+    result = await session.execute(
+        select(UserModel).where(UserModel.email == email.lower())
+    )
+    row = result.scalar_one_or_none()
+    return _user_row_to_dict(row)
+
+
+async def list_users_by_tenant(
+    session: AsyncSession, tenant_id: str
+) -> List[Dict[str, Any]]:
+    result = await session.execute(
+        select(UserModel)
+        .where(UserModel.tenant_id == tenant_id, UserModel.is_active.is_(True))
+        .order_by(UserModel.created_at)
+    )
+    return [_user_row_to_dict(row) for row in result.scalars().all() if row]
+
+
+def _user_row_to_dict(row: Optional[UserModel]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    return {
+        "id":              row.id,
+        "tenant_id":       row.tenant_id,
+        "email":           row.email,
+        "display_name":    row.display_name or "",
+        "hashed_password": row.hashed_password,
+        "role":            row.role,
+        "is_active":       row.is_active,
+        "created_at":      row.created_at,
+        "last_login_at":   row.last_login_at or "",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Refresh tokens
+# ---------------------------------------------------------------------------
+
+async def get_valid_refresh_token(
+    session: AsyncSession, token_hash: str
+) -> Optional[Dict[str, Any]]:
+    """Return a non-revoked, non-expired refresh_token row as a dict."""
+    now = datetime.now(timezone.utc).isoformat()
+    result = await session.execute(
+        select(RefreshTokenModel).where(
+            RefreshTokenModel.token_hash == token_hash,
+            RefreshTokenModel.revoked_at.is_(None),
+            RefreshTokenModel.expires_at > now,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    return {
+        "id":         row.id,
+        "user_id":    row.user_id,
+        "token_hash": row.token_hash,
+        "expires_at": row.expires_at,
+        "revoked_at": row.revoked_at,
+        "meta":       row.meta,
+    }
+
+
+async def revoke_refresh_token(session: AsyncSession, token_id: str) -> None:
+    from sqlalchemy import update as sa_update
+    await session.execute(
+        sa_update(RefreshTokenModel)
+        .where(RefreshTokenModel.id == token_id)
+        .values(revoked_at=_now())
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workspace
+# ---------------------------------------------------------------------------
+
+async def get_workspace_by_slug(
+    session: AsyncSession, tenant_id: str, slug: str
+) -> Optional[Dict[str, Any]]:
+    result = await session.execute(
+        select(WorkspaceModel).where(
+            WorkspaceModel.tenant_id == tenant_id,
+            WorkspaceModel.slug == slug,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    return {
+        "id": row.id, "tenant_id": row.tenant_id,
+        "slug": row.slug, "name": row.name,
+        "created_by": row.created_by, "is_active": row.is_active,
+    }
+
+
+async def list_workspaces_by_tenant(
+    session: AsyncSession, tenant_id: str
+) -> List[Dict[str, Any]]:
+    result = await session.execute(
+        select(WorkspaceModel)
+        .where(WorkspaceModel.tenant_id == tenant_id, WorkspaceModel.is_active.is_(True))
+        .order_by(WorkspaceModel.created_at)
+    )
+    return [
+        {"id": row.id, "tenant_id": row.tenant_id, "slug": row.slug, "name": row.name}
+        for row in result.scalars().all()
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Tenant-scoped job list (used after Sprint C route protection)
+# ---------------------------------------------------------------------------
+
+async def load_jobs_by_tenant(
+    session: AsyncSession,
+    tenant_id: str,
+    user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return jobs for a tenant.
+
+    When ``user_id`` is provided only that user's jobs are returned
+    (member-level visibility).  Pass ``user_id=None`` for admin/owner view.
+
+    Jobs created before migration 005 (no tenant_id column yet) have
+    ``tenant_id = None`` and are included only when ``tenant_id`` matches
+    the bootstrap constant, preserving backward compatibility.
+    """
+    stmt = select(JobModel).where(JobModel.tenant_id == tenant_id)
+    if user_id:
+        stmt = stmt.where(JobModel.created_by == user_id)
+    stmt = stmt.order_by(JobModel.created_at.desc())
+
+    result = await session.execute(stmt)
+    rows = result.scalars().all()
+    return [
+        {
+            "id":           row.id,
+            "type":         row.type,
+            "workspace_id": row.workspace_id,
+            "requirement":  row.requirement,
+            "status":       row.status,
+            "created_at":   row.created_at,
+            "tenant_id":    row.tenant_id,
+            "created_by":   row.created_by,
         }
         for row in rows
     ]
