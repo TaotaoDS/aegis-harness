@@ -1,19 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useT, useLocale } from "@/lib/i18n";
+import { useAuth } from "@/lib/auth/context";
 
-const STRIP_EMOJI = /^[\p{Emoji}\u2600-\u26FF]\s*/u;
+const STRIP_EMOJI = /^[\p{Emoji}☀-⛿]\s*/u;
 
 function stripEmoji(s: string): string {
   return s.replace(STRIP_EMOJI, "");
 }
 
+/** Role badge colour */
+function roleBadgeClass(role: string): string {
+  if (role === "owner") return "text-amber-400 bg-amber-400/10";
+  if (role === "admin") return "text-blue-400 bg-blue-400/10";
+  return "text-slate-400 bg-slate-700";
+}
+
 export function Sidebar() {
   const t = useT();
   const { locale, setLocale } = useLocale();
+  const { user, logout } = useAuth();
   const pathname = usePathname();
+  const router = useRouter();
 
   const links = [
     { href: "/",          label: stripEmoji(t.nav.dashboard), icon: "📊" },
@@ -26,6 +36,18 @@ export function Sidebar() {
     if (href === "/chat") return pathname === "/chat";
     if (href === "/") return pathname === "/";
     return pathname?.startsWith(href) ?? false;
+  }
+
+  async function handleLogout() {
+    await logout();
+    router.replace("/login");
+  }
+
+  /** Role label from translations */
+  function roleLabel(role: string): string {
+    if (role === "owner") return t.auth.roleOwner;
+    if (role === "admin") return t.auth.roleAdmin;
+    return t.auth.roleMember;
   }
 
   return (
@@ -57,28 +79,56 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Bottom: language toggle + version */}
-      <div className="px-4 py-4 border-t border-slate-800 flex items-center justify-between">
-        <div className="flex items-center gap-1 text-xs text-slate-500">
-          <button
-            onClick={() => setLocale("zh")}
-            className={`px-2 py-0.5 rounded transition-colors ${
-              locale === "zh" ? "text-white bg-slate-700" : "hover:text-slate-300"
-            }`}
-          >
-            中文
-          </button>
-          <span>/</span>
-          <button
-            onClick={() => setLocale("en")}
-            className={`px-2 py-0.5 rounded transition-colors ${
-              locale === "en" ? "text-white bg-slate-700" : "hover:text-slate-300"
-            }`}
-          >
-            EN
-          </button>
+      {/* Bottom section */}
+      <div className="px-3 py-3 border-t border-slate-800 space-y-2">
+        {/* User info */}
+        {user && (
+          <div className="px-1 pb-1">
+            <p
+              className="text-xs text-white truncate font-medium"
+              title={user.email}
+            >
+              {user.display_name || user.email}
+            </p>
+            <div className="flex items-center justify-between mt-1">
+              <span
+                className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${roleBadgeClass(user.role)}`}
+              >
+                {roleLabel(user.role)}
+              </span>
+              <button
+                onClick={handleLogout}
+                className="text-[10px] text-slate-500 hover:text-red-400 transition-colors"
+              >
+                {t.auth.logoutBtn}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Language toggle + version */}
+        <div className="flex items-center justify-between px-1">
+          <div className="flex items-center gap-1 text-xs text-slate-500">
+            <button
+              onClick={() => setLocale("zh")}
+              className={`px-2 py-0.5 rounded transition-colors ${
+                locale === "zh" ? "text-white bg-slate-700" : "hover:text-slate-300"
+              }`}
+            >
+              中文
+            </button>
+            <span>/</span>
+            <button
+              onClick={() => setLocale("en")}
+              className={`px-2 py-0.5 rounded transition-colors ${
+                locale === "en" ? "text-white bg-slate-700" : "hover:text-slate-300"
+              }`}
+            >
+              EN
+            </button>
+          </div>
+          <span className="text-xs text-slate-600">v0.0.2</span>
         </div>
-        <span className="text-xs text-slate-600">v0.0.2</span>
       </div>
     </aside>
   );
