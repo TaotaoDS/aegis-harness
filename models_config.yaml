@@ -192,4 +192,30 @@ execution:
 #  - match: {}                               # 兜底路由
 #    model: claude-sonnet
 
-# 
+# =============================================================================
+# Embedding model (知识库语义检索)
+# =============================================================================
+# 控制 core_orchestrator/vector_store.py 使用的 embedding 后端。
+# 优先级：EMBEDDING_* 环境变量 > 此配置文件 > 自动检测
+#
+# provider 可选值:
+#   openai  — 使用 OpenAI Embeddings API (或任何 OpenAI 兼容端点)
+#             需要安装 openai 包；需要 OPENAI_API_KEY 或自定义 api_key_env
+#   ollama  — 使用 Ollama 本地 REST API，纯 stdlib 实现，断网可用
+#             默认端点 http://localhost:11434，可通过 base_url 修改
+#
+# 离线 / 断网模式示例 (取消下面注释并按需调整):
+# ---------------------------------------------------------------------------
+#embedding:
+#  provider: ollama
+#  model: nomic-embed-text       # 其他可选: mxbai-embed-large, all-minilm
+#  base_url: http://localhost:11434
+#
+# 云端 OpenAI 模式示例:
+# ---------------------------------------------------------------------------
+#embedding:
+#  provider: openai
+#  model: text-embedding-3-small
+#  api_key_env: OPENAI_API_KEY   # 存放 API Key 的环境变量名
+#  # base_url: https://...       # OpenAI 兼容端点 (Azure/LM Studio 等)
+

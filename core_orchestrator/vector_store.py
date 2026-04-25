@@ -1,35 +1,235 @@
 """Semantic vector store for solution documents.
 
-Generates text embeddings via the OpenAI Embeddings API
-(model ``text-embedding-3-small``, 1536 dimensions) and persists them in
-the ``solutions.embedding`` column (JSONB array in PostgreSQL).
+Pluggable embedding backend
+---------------------------
+The provider is selected in this order (highest priority first):
 
-Similarity search loads all stored vectors and ranks them by cosine
-similarity in Python — fast enough for collections up to ~50 k entries
-and requires no pgvector extension.
+1. **Environment variables**:
+
+   =============================  =============================================
+   ``EMBEDDING_PROVIDER``         ``"openai"`` or ``"ollama"``
+   ``EMBEDDING_MODEL``            model / checkpoint name
+   ``EMBEDDING_BASE_URL``         base URL (required for Ollama; optional for
+                                  OpenAI-compatible endpoints)
+   ``EMBEDDING_API_KEY_ENV``      name of the env-var that holds the API key
+                                  (default: ``"OPENAI_API_KEY"``)
+   =============================  =============================================
+
+2. **models_config.yaml** ``embedding:`` section::
+
+       embedding:
+         provider: ollama
+         model: nomic-embed-text
+         base_url: http://localhost:11434
+
+3. **Auto-detection** (no explicit config):
+
+   * ``OPENAI_API_KEY`` is set in the environment → ``openai``
+   * Otherwise → ``ollama`` at ``http://localhost:11434``
+
+Provider notes
+--------------
+* **openai** — requires the ``openai`` package.  Works with any
+  OpenAI-compatible endpoint (Azure, LM Studio, etc.) when ``base_url``
+  is also set.
+* **ollama** — calls ``POST <base_url>/api/embeddings`` (Ollama native API).
+  Uses Python stdlib ``urllib`` only — **no extra packages required**.
 
 Graceful degradation
 --------------------
-* No ``DATABASE_URL``   → embed / upsert are no-ops; search returns [].
-* No ``OPENAI_API_KEY`` → embed returns ``None``; upsert skips DB write.
-* OpenAI API error      → logged, no exception raised.
-* DB error              → logged, no exception raised.
-
-All public methods are ``async`` so they fit naturally into the FastAPI
-lifespan context.
+* No DB               → embed / upsert are no-ops; search returns ``[]``.
+* Provider unavailable → ``embed_text`` returns ``None``; upsert skips.
+* Any error           → logged at WARNING; no exception propagates.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import os
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_EMBED_MODEL = "text-embedding-3-small"
-_EMBED_DIMS  = 1536
-_MAX_CHARS   = 8_000   # truncate very long texts before embedding
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+
+_DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
+_DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
+_DEFAULT_OLLAMA_URL   = "http://localhost:11434"
+_MAX_CHARS            = 8_000   # truncate very long texts before embedding
+
+
+# ---------------------------------------------------------------------------
+# Embedding config (resolved once, then cached)
+# ---------------------------------------------------------------------------
+
+class _EmbeddingConfig:
+    __slots__ = ("provider", "model", "base_url", "api_key_env")
+
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        base_url: Optional[str],
+        api_key_env: str,
+    ) -> None:
+        self.provider    = provider
+        self.model       = model
+        self.base_url    = base_url
+        self.api_key_env = api_key_env
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"_EmbeddingConfig(provider={self.provider!r}, model={self.model!r}, "
+            f"base_url={self.base_url!r})"
+        )
+
+
+_cfg_cache: Optional[_EmbeddingConfig] = None
+
+
+def _resolve_config() -> _EmbeddingConfig:
+    """Build the effective embedding config without using the cache."""
+    provider    = os.environ.get("EMBEDDING_PROVIDER",    "").strip()
+    model       = os.environ.get("EMBEDDING_MODEL",       "").strip()
+    base_url    = os.environ.get("EMBEDDING_BASE_URL",    "").strip() or None
+    api_key_env = os.environ.get("EMBEDDING_API_KEY_ENV", "").strip()
+
+    # ── yaml fallback ────────────────────────────────────────────────────────
+    if not provider:
+        try:
+            from pathlib import Path
+            import yaml  # type: ignore[import]
+            cfg_path = Path(__file__).parent.parent / "models_config.yaml"
+            if cfg_path.exists():
+                with open(cfg_path) as fh:
+                    raw = yaml.safe_load(fh) or {}
+                emb = raw.get("embedding") or {}
+                provider    = provider    or str(emb.get("provider",    "")).strip()
+                model       = model       or str(emb.get("model",       "")).strip()
+                base_url    = base_url    or (str(emb.get("base_url",   "")).strip() or None)
+                api_key_env = api_key_env or str(emb.get("api_key_env", "")).strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[VectorStore] could not read embedding section from yaml: %s", exc)
+
+    # ── auto-detect ──────────────────────────────────────────────────────────
+    if not provider:
+        provider = "openai" if os.environ.get("OPENAI_API_KEY") else "ollama"
+
+    # ── per-provider defaults ─────────────────────────────────────────────────
+    if not model:
+        model = _DEFAULT_OPENAI_MODEL if provider == "openai" else _DEFAULT_OLLAMA_MODEL
+    if provider == "ollama" and not base_url:
+        base_url = _DEFAULT_OLLAMA_URL
+    if not api_key_env:
+        api_key_env = "OPENAI_API_KEY"
+
+    return _EmbeddingConfig(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        api_key_env=api_key_env,
+    )
+
+
+def _get_config() -> _EmbeddingConfig:
+    global _cfg_cache
+    if _cfg_cache is None:
+        _cfg_cache = _resolve_config()
+    return _cfg_cache
+
+
+def invalidate_embedding_config_cache() -> None:
+    """Force config + singleton to be rebuilt on the next embed call.
+
+    Call this after saving new embedding settings through the Settings UI
+    (analogous to ``invalidate_model_cache`` in model_router).
+    """
+    global _cfg_cache, _instance
+    _cfg_cache = None
+    _instance  = None
+
+
+# ---------------------------------------------------------------------------
+# Provider back-ends
+# ---------------------------------------------------------------------------
+
+async def _embed_openai(
+    text: str,
+    model: str,
+    api_key: str,
+    base_url: Optional[str] = None,
+) -> Optional[List[float]]:
+    """Embed via the OpenAI (or OpenAI-compatible) Embeddings API.
+
+    Parameters
+    ----------
+    text:     The text to embed (pre-truncated).
+    model:    Model name, e.g. ``"text-embedding-3-small"``.
+    api_key:  API key string.
+    base_url: Optional base URL override for OpenAI-compatible endpoints
+              (e.g. ``"http://localhost:11434/v1"`` for Ollama OpenAI compat).
+    """
+    try:
+        from openai import AsyncOpenAI  # type: ignore[import]
+        kwargs: Dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = AsyncOpenAI(**kwargs)
+        resp   = await client.embeddings.create(model=model, input=text)
+        return resp.data[0].embedding
+    except ImportError:
+        logger.debug("[VectorStore] openai package not installed — cannot use OpenAI backend")
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[VectorStore] OpenAI embed failed: %s", exc)
+        return None
+
+
+async def _embed_ollama(
+    text: str,
+    model: str,
+    base_url: str,
+) -> Optional[List[float]]:
+    """Embed via the Ollama native REST API.
+
+    Endpoint: ``POST <base_url>/api/embeddings``
+    Payload:  ``{"model": "<model>", "prompt": "<text>"}``
+
+    Uses stdlib ``urllib`` only — **no extra packages required**.  The
+    blocking HTTP call is run in an executor so it does not block the event
+    loop.
+    """
+    import asyncio
+    import json
+    import urllib.error
+    import urllib.request
+
+    url     = f"{base_url.rstrip('/')}/api/embeddings"
+    payload = json.dumps({"model": model, "prompt": text}).encode("utf-8")
+    req     = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    def _sync() -> Optional[List[float]]:
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+                return data.get("embedding")
+        except urllib.error.URLError as exc:
+            logger.warning("[VectorStore] Ollama unreachable at %s: %s", url, exc)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[VectorStore] Ollama embed failed: %s", exc)
+            return None
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync)
 
 
 # ---------------------------------------------------------------------------
@@ -55,52 +255,67 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
 class VectorStore:
     """Manage embeddings for solution documents stored in PostgreSQL.
 
+    Configuration is resolved automatically from environment variables and
+    ``models_config.yaml`` (see module docstring for the full priority order).
+
     Parameters
     ----------
     openai_api_key:
-        Explicit key override.  When ``None`` the key is read from the
-        ``OPENAI_API_KEY`` environment variable at call time.
+        *Legacy / testing only.* When provided (non-None string), forces the
+        ``openai`` provider with this key, bypassing all config resolution.
     embed_model:
-        OpenAI embedding model name.  Default: ``text-embedding-3-small``.
+        *Legacy / testing only.* When provided, overrides the resolved model
+        name regardless of config.
     """
 
     def __init__(
         self,
         openai_api_key: Optional[str] = None,
-        embed_model: str = _EMBED_MODEL,
+        embed_model: Optional[str] = None,
     ) -> None:
-        self._api_key    = openai_api_key   # None → read from env at call time
-        self._model      = embed_model
+        # Legacy constructor params kept for backward compatibility with tests.
+        # A non-None openai_api_key triggers the legacy OpenAI path directly.
+        self._legacy_key   = openai_api_key
+        self._legacy_model = embed_model
 
     # ── Embedding ────────────────────────────────────────────────────────
 
     async def embed_text(self, text: str) -> Optional[List[float]]:
-        """Return a 1536-dimensional embedding for *text*, or ``None`` on any error.
+        """Return an embedding vector for *text*, or ``None`` on any error.
 
-        Truncates input to ``_MAX_CHARS`` characters before sending.
+        The provider, model, and credentials are resolved from configuration
+        (see module docstring).  Input is truncated to ``_MAX_CHARS``
+        characters before sending to the embedding endpoint.
         """
-        try:
-            import os
-            from openai import AsyncOpenAI, APIError
+        truncated = text[:_MAX_CHARS]
 
-            api_key = self._api_key or os.environ.get("OPENAI_API_KEY")
+        # ── Legacy path: explicit openai_api_key constructor arg ──────────────
+        # (used by tests and callers that pre-date config-driven setup)
+        if self._legacy_key is not None:
+            model = self._legacy_model or _DEFAULT_OPENAI_MODEL
+            return await _embed_openai(truncated, model, self._legacy_key)
+
+        # ── Config-driven path ────────────────────────────────────────────────
+        cfg = _get_config()
+
+        if cfg.provider == "openai":
+            api_key = os.environ.get(cfg.api_key_env)
             if not api_key:
+                logger.debug(
+                    "[VectorStore] env var '%s' not set — embeddings disabled",
+                    cfg.api_key_env,
+                )
                 return None
+            model = self._legacy_model or cfg.model
+            return await _embed_openai(truncated, model, api_key, cfg.base_url)
 
-            client = AsyncOpenAI(api_key=api_key)
-            truncated = text[:_MAX_CHARS]
-            resp = await client.embeddings.create(
-                model=self._model,
-                input=truncated,
-            )
-            return resp.data[0].embedding
+        if cfg.provider == "ollama":
+            model    = self._legacy_model or cfg.model
+            base_url = cfg.base_url or _DEFAULT_OLLAMA_URL
+            return await _embed_ollama(truncated, model, base_url)
 
-        except ImportError:
-            logger.debug("[VectorStore] openai not installed — embeddings disabled")
-            return None
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[VectorStore] embed_text failed: %s", exc)
-            return None
+        logger.warning("[VectorStore] Unknown embedding provider '%s'", cfg.provider)
+        return None
 
     # ── Persistence ───────────────────────────────────────────────────────
 
@@ -121,7 +336,7 @@ class VectorStore:
         ``embedding`` column.
         """
         try:
-            from db.connection import get_session, is_db_available
+            from db.connection import get_session, is_db_available  # noqa: F401
             if not is_db_available():
                 return False
         except ImportError:
@@ -138,8 +353,7 @@ class VectorStore:
             async with get_session() as session:
                 await session.execute(
                     sql_text(
-                        "UPDATE solutions SET embedding = :emb "
-                        "WHERE id = :sid"
+                        "UPDATE solutions SET embedding = :emb WHERE id = :sid"
                     ),
                     {"emb": embedding, "sid": solution_id},
                 )
