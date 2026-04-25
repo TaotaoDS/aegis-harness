@@ -17,7 +17,7 @@ workspaces       — formalised workspace rows (slug matches legacy workspace_id
 workspace_members — fine-grained workspace ACL (enforced in v0.2.0)
 """
 
-from sqlalchemy import Boolean, Column, Integer, String, Text, JSON
+from sqlalchemy import Boolean, Column, Integer, String, Text, JSON, PrimaryKeyConstraint
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -84,9 +84,20 @@ class SolutionModel(Base):
 
 
 class SettingModel(Base):
-    __tablename__ = "settings"
+    """Global + tenant-scoped settings store.
 
-    key        = Column(String(255), primary_key=True)
+    After migration 005 the PK is ``(tenant_id, key)``.
+    ``tenant_id`` defaults to the bootstrap tenant UUID for backward
+    compatibility with pre-multitenancy data.
+    """
+    __tablename__ = "settings"
+    __table_args__ = (
+        PrimaryKeyConstraint("tenant_id", "key", name="settings_pkey"),
+    )
+
+    # tenant_id defaults to the bootstrap tenant in repository helpers
+    tenant_id  = Column(String(36),  nullable=False)
+    key        = Column(String(255), nullable=False)
     value      = Column(JSON,        nullable=False)
     updated_at = Column(String(50),  nullable=False)
 

@@ -182,24 +182,64 @@ async def load_checkpoint(
 # Settings repository
 # ===========================================================================
 
-async def get_setting(session: AsyncSession, key: str) -> Optional[Any]:
-    """Return the parsed JSON value for a settings key, or None."""
+# Bootstrap tenant UUID — pre-existing rows are backfilled to this in migration 005.
+_BOOTSTRAP_TENANT = "00000000-0000-0000-0000-000000000001"
+
+
+async def get_setting(
+    session: AsyncSession, key: str, tenant_id: str = _BOOTSTRAP_TENANT
+) -> Optional[Any]:
+    """Return the parsed JSON value for ``(tenant_id, key)``, or ``None``.
+
+    Falls back to the bootstrap tenant when the exact tenant has no matching
+    row, so settings configured before multi-tenancy was enabled are still
+    visible to all tenants until they override them explicitly.
+    """
     result = await session.execute(
-        select(SettingModel).where(SettingModel.key == key)
+        select(SettingModel).where(
+            SettingModel.key       == key,
+            SettingModel.tenant_id == tenant_id,
+        )
     )
     row = result.scalar_one_or_none()
+    if row is None and tenant_id != _BOOTSTRAP_TENANT:
+        # Transparent fall-through to bootstrap (global) settings
+        result = await session.execute(
+            select(SettingModel).where(
+                SettingModel.key       == key,
+                SettingModel.tenant_id == _BOOTSTRAP_TENANT,
+            )
+        )
+        row = result.scalar_one_or_none()
     return row.value if row else None
 
 
-async def set_setting(session: AsyncSession, key: str, value: Any) -> None:
-    """Upsert a settings key."""
-    payload = {"key": key, "value": value, "updated_at": _now()}
+async def set_setting(
+    session: AsyncSession, key: str, value: Any, tenant_id: str = _BOOTSTRAP_TENANT
+) -> None:
+    """Upsert a ``(tenant_id, key)`` settings row."""
+    payload = {
+        "tenant_id":  tenant_id,
+        "key":        key,
+        "value":      value,
+        "updated_at": _now(),
+    }
     stmt = pg_insert(SettingModel).values(**payload)
     stmt = stmt.on_conflict_do_update(
-        index_elements=["key"],
+        index_elements=["tenant_id", "key"],
         set_={"value": value, "updated_at": _now()},
     )
     await session.execute(stmt)
+
+
+async def get_all_settings_by_tenant(
+    session: AsyncSession, tenant_id: str = _BOOTSTRAP_TENANT
+) -> dict[str, Any]:
+    """Return all settings for a tenant as a plain ``{key: value}`` dict."""
+    result = await session.execute(
+        select(SettingModel).where(SettingModel.tenant_id == tenant_id)
+    )
+    return {row.key: row.value for row in result.scalars().all()}
 
 
 # ===========================================================================

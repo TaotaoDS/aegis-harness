@@ -1,27 +1,31 @@
 """MCP server management endpoints.
 
-GET  /mcp/servers          — list all registered MCP servers
-POST /mcp/servers          — register a new server
-PUT  /mcp/servers/{id}     — update name / URL / enabled flag
-DELETE /mcp/servers/{id}   — remove a server
-POST /mcp/servers/{id}/probe — test connection + discover tools
+GET  /mcp/servers          — list registered MCP servers for the tenant
+POST /mcp/servers          — register a new server (admin+)
+PUT  /mcp/servers/{id}     — update name / URL / enabled flag (admin+)
+DELETE /mcp/servers/{id}   — remove a server (admin+)
+POST /mcp/servers/{id}/probe — test connection + discover tools (admin+)
 
-Persistence
------------
-Server registrations are stored under the ``mcp_servers`` key in the
-settings service (DB-backed, in-memory fallback) so they survive restarts.
+Auth & authorisation
+--------------------
+All write operations require Admin or Owner role.
+Reads (GET) are visible to all authenticated users.
 
-The MCPManager instance is module-level and loaded from settings on the
-first request.
+Multi-tenancy
+-------------
+MCP server registrations are isolated per tenant.  The in-process manager
+cache is keyed by tenant_id so different tenants never share server lists.
+Persistence uses the scoped ``mcp_servers`` key in the settings service.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..deps import CurrentUser, get_current_user, require_admin
 from ..settings_service import get_setting, set_setting
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -46,27 +50,25 @@ class UpdateServerRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Manager lifecycle (lazy-loaded singleton per process)
+# Per-tenant manager cache
 # ---------------------------------------------------------------------------
 
-_manager = None
+_managers: Dict[str, Any] = {}   # tenant_id → MCPManager
 
 
-async def _get_manager():
-    """Return the module-level MCPManager, loading persisted servers on first use."""
-    global _manager
-    if _manager is None:
+async def _get_manager(tenant_id: str):
+    """Return the MCPManager for ``tenant_id``, loading persisted servers lazily."""
+    if tenant_id not in _managers:
         from core_orchestrator.mcp_manager import MCPManager
-        saved = await get_setting("mcp_servers") or []
+        saved = await get_setting("mcp_servers", tenant_id) or []
         if not isinstance(saved, list):
             saved = []
-        _manager = MCPManager(servers=saved)
-    return _manager
+        _managers[tenant_id] = MCPManager(servers=saved)
+    return _managers[tenant_id]
 
 
-async def _persist(manager) -> None:
-    """Write current server list back to the settings store."""
-    await set_setting("mcp_servers", manager.to_dict_list())
+async def _persist(manager, tenant_id: str) -> None:
+    await set_setting("mcp_servers", manager.to_dict_list(), tenant_id)
 
 
 # ---------------------------------------------------------------------------
@@ -74,28 +76,32 @@ async def _persist(manager) -> None:
 # ---------------------------------------------------------------------------
 
 @router.get("/servers")
-async def list_servers() -> List[Dict[str, Any]]:
-    """Return all registered MCP servers."""
-    m = await _get_manager()
+async def list_servers(
+    current_user: CurrentUser = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    """Return all MCP servers registered for the current tenant."""
+    m = await _get_manager(str(current_user.tenant_id))
     return m.to_dict_list()
 
 
 @router.post("/servers", status_code=201)
-async def add_server(body: AddServerRequest) -> Dict[str, Any]:
-    """Register a new MCP server."""
+async def add_server(
+    body: AddServerRequest,
+    current_user: CurrentUser = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Register a new MCP server (admin/owner only)."""
     if not body.name.strip():
         raise HTTPException(status_code=422, detail="name must not be empty")
     if not body.url.strip():
         raise HTTPException(status_code=422, detail="url must not be empty")
 
-    m = await _get_manager()
+    tid = str(current_user.tenant_id)
+    m   = await _get_manager(tid)
     server = m.add_server(
-        name        = body.name,
-        url         = body.url,
-        description = body.description,
-        enabled     = body.enabled,
+        name=body.name, url=body.url,
+        description=body.description, enabled=body.enabled,
     )
-    await _persist(m)
+    await _persist(m, tid)
     return server.to_dict()
 
 
@@ -103,45 +109,46 @@ async def add_server(body: AddServerRequest) -> Dict[str, Any]:
 async def update_server(
     server_id: str,
     body: UpdateServerRequest,
+    current_user: CurrentUser = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Update a registered server's name, URL, or enabled state."""
-    m = await _get_manager()
+    """Update a server (admin/owner only)."""
+    tid = str(current_user.tenant_id)
+    m   = await _get_manager(tid)
     server = m.update_server(
-        server_id,
-        name        = body.name,
-        url         = body.url,
-        enabled     = body.enabled,
-        description = body.description,
+        server_id, name=body.name, url=body.url,
+        enabled=body.enabled, description=body.description,
     )
     if server is None:
         raise HTTPException(status_code=404, detail=f"Server '{server_id}' not found")
-    await _persist(m)
+    await _persist(m, tid)
     return server.to_dict()
 
 
 @router.delete("/servers/{server_id}")
-async def remove_server(server_id: str) -> Dict[str, str]:
-    """Remove an MCP server registration."""
-    m = await _get_manager()
+async def remove_server(
+    server_id: str,
+    current_user: CurrentUser = Depends(require_admin),
+) -> Dict[str, str]:
+    """Remove an MCP server (admin/owner only)."""
+    tid = str(current_user.tenant_id)
+    m   = await _get_manager(tid)
     removed = m.remove_server(server_id)
     if not removed:
         raise HTTPException(status_code=404, detail=f"Server '{server_id}' not found")
-    await _persist(m)
+    await _persist(m, tid)
     return {"id": server_id, "status": "deleted"}
 
 
 @router.post("/servers/{server_id}/probe")
-async def probe_server(server_id: str) -> Dict[str, Any]:
-    """Probe an MCP server: verify connectivity and discover its tools.
-
-    Returns ``{"status": "connected", "tools": [...], "tool_count": N}``
-    on success, or ``{"status": "error", "error": "..."}`` on failure.
-    Persists the updated tool list and status.
-    """
-    m = await _get_manager()
+async def probe_server(
+    server_id: str,
+    current_user: CurrentUser = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Probe connectivity and discover tools (admin/owner only)."""
+    tid = str(current_user.tenant_id)
+    m   = await _get_manager(tid)
     if not m.get_server(server_id):
         raise HTTPException(status_code=404, detail=f"Server '{server_id}' not found")
-
     result = m.probe_server(server_id)
-    await _persist(m)   # persist updated status + tool list
+    await _persist(m, tid)
     return result

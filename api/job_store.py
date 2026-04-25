@@ -25,6 +25,9 @@ class JobRecord:
         "id", "type", "workspace_id", "requirement",
         "status", "created_at", "bus", "hitl_manager", "interview_manager",
         "user_profile",   # Optional[dict] — pre-loaded UserProfile dict
+        # v0.1.0 — multi-tenancy: nullable for backward compat
+        "tenant_id",      # str | None — set at job creation from CurrentUser
+        "created_by",     # str | None — user_id who created the job
     )
 
     def __init__(
@@ -44,6 +47,8 @@ class JobRecord:
         self.hitl_manager = None      # HITLManager, attached before start()
         self.interview_manager = None # InterviewManager, attached before start()
         self.user_profile = None      # dict | None — loaded from settings at job creation
+        self.tenant_id = None         # set by POST /jobs route
+        self.created_by = None        # set by POST /jobs route
 
 
 _store: Dict[str, JobRecord] = {}
@@ -100,6 +105,8 @@ def import_job(job_data: Dict[str, Any]) -> JobRecord:
         job.created_at = job_data.get(
             "created_at", datetime.now(timezone.utc).isoformat()
         )
+        job.tenant_id  = job_data.get("tenant_id")
+        job.created_by = job_data.get("created_by")
         _store[job_id] = job
 
     return job

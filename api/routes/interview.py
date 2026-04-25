@@ -3,26 +3,33 @@
 POST /jobs/{job_id}/answer
   Body: {"answer": "user's response to the pending CEO question"}
 
-The CEO pipeline thread is blocked in InterviewManager.wait_for_answer()
-until this endpoint is called.  It sets the threading.Event and returns
-the pipeline to the CEO to process the answer and (optionally) ask the
-next question.
+Auth
+----
+Requires authenticated user.  Members can only answer questions in their
+own jobs.  Admins/Owners can answer on any job in the tenant.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from ..deps import CurrentUser, get_current_user
 from ..job_store import get_job
 from ..models import AnswerRequest
+from ..routes.jobs import _assert_job_access
 
 router = APIRouter(prefix="/jobs", tags=["interview"])
 
 
 @router.post("/{job_id}/answer")
-async def submit_answer(job_id: str, body: AnswerRequest):
+async def submit_answer(
+    job_id: str,
+    body: AnswerRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     """Submit the user's answer to the CEO's current interview question."""
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _assert_job_access(job, current_user)
 
     if not job.interview_manager:
         raise HTTPException(
