@@ -25,8 +25,11 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
 
+  const isAdminOrOwner = user?.role === "owner" || user?.role === "admin";
+
   const links = [
     { href: "/",          label: stripEmoji(t.nav.dashboard), icon: "📊" },
+    ...(isAdminOrOwner ? [{ href: "/console", label: "控制台看板", icon: "📈" }] : []),
     { href: "/chat",      label: stripEmoji(t.nav.chat),      icon: "💬" },
     { href: "/jobs/new",  label: stripEmoji(t.nav.newJob),    icon: "＋" },
     { href: "/settings",  label: stripEmoji(t.nav.settings),  icon: "⚙️" },

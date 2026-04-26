@@ -38,12 +38,17 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Non-root user for security
 RUN useradd -m -u 1000 harness
-USER harness
 
 WORKDIR /app
 
 # Copy application source (excludes files matched by .dockerignore)
 COPY --chown=harness:harness . .
+
+# Ensure workspaces dir is owned by harness before switching user
+# (Docker named volumes mount as root; this sets correct ownership at build time)
+RUN mkdir -p /app/workspaces && chown harness:harness /app/workspaces
+
+USER harness
 
 # Workspaces volume — generated files survive container restarts when mounted
 VOLUME ["/app/workspaces"]
