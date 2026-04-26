@@ -18,6 +18,7 @@ via two equivalent patterns:
 Both patterns can be mixed freely within the same config file.
 """
 
+import logging
 import os
 import re
 import threading
@@ -27,6 +28,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import yaml
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 from .llm_connector import ToolCall, ToolHandler, get_connector
 
@@ -160,6 +163,8 @@ class ModelRouter:
         self._models: Dict[str, Dict[str, Any]] = cfg["models"]
         self._routes = cfg["routes"]
 
+        self._log_key_availability()
+
     @property
     def models(self) -> Dict[str, Dict[str, Any]]:
         return self._models
@@ -204,6 +209,36 @@ class ModelRouter:
             )
         return key
 
+    # -----------------------------------------------------------------------
+    # Key availability helpers
+    # -----------------------------------------------------------------------
+
+    def is_key_available(self, model_name: str) -> bool:
+        """Return True iff the model's API key is set and non-empty."""
+        try:
+            self.get_api_key(model_name)
+            return True
+        except ConfigError:
+            return False
+
+    def available_models(self) -> List[str]:
+        """Return model names whose API keys are currently set."""
+        return [name for name in self._models if self.is_key_available(name)]
+
+    def _log_key_availability(self) -> None:
+        """Log a one-time summary of which models have valid keys."""
+        ok, missing = [], []
+        for name in self._models:
+            (ok if self.is_key_available(name) else missing).append(name)
+        logger.info("[ModelRouter] Available models (%d): %s", len(ok), ok)
+        if missing:
+            logger.warning(
+                "[ModelRouter] Models with missing/empty API key (%d) — will be "
+                "skipped during routing: %s",
+                len(missing),
+                missing,
+            )
+
     def _get_base_url(self, model_name: str) -> Optional[str]:
         """Resolve the base URL for a model.
 
@@ -231,11 +266,52 @@ class ModelRouter:
         return os.environ.get(env_var) or None
 
     def resolve(self, **context: str) -> str:
-        """Match context against routes, return the first matching model name."""
+        """Match context against routes, returning the first model with a valid API key.
+
+        Routes are evaluated top-to-bottom.  If a matched route's model has no
+        valid key, that route is silently skipped and evaluation continues to the
+        next route.  This means you can list preferred providers first and cheaper
+        fallbacks last — the router picks whichever one is actually configured.
+
+        If every route is skipped (all keys missing), the router falls back to the
+        first model in the config that *does* have a key, ensuring at least one
+        provider is always tried.
+
+        Raises ConfigError only when no model in the entire config has a key set.
+        """
+        skipped: List[str] = []   # routes that matched context but had missing keys
+
         for route in self._routes:
             match_criteria = route.get("match", {})
             if all(context.get(k) == v for k, v in match_criteria.items()):
-                return route["model"]
+                model_name = route["model"]
+                if self.is_key_available(model_name):
+                    return model_name
+                skipped.append(model_name)
+                logger.debug(
+                    "[ModelRouter] Route matched but model '%s' has no valid key — skipping",
+                    model_name,
+                )
+
+        if skipped:
+            # At least one route matched context, but every matched model lacked a key.
+            # Last resort: use the first model in the config that has any valid key.
+            fallback_candidates = self.available_models()
+            if fallback_candidates:
+                chosen = fallback_candidates[0]
+                logger.warning(
+                    "[ModelRouter] All matched routes had missing API keys (skipped: %s). "
+                    "Falling back to first available model: '%s'",
+                    skipped,
+                    chosen,
+                )
+                return chosen
+            raise ConfigError(
+                "No model with a valid API key is available. "
+                f"Routes tried (all keys missing): {skipped}. "
+                "Please set at least one API key in your .env file."
+            )
+
         raise ConfigError(f"No route matched context: {context}")
 
     def call(self, model_name: str, text: str) -> str:

@@ -126,8 +126,22 @@ models:
      temperature: 0.7
   #   tier: standard
 routes:
-  - match: {}                               # 兜底路由 — NVIDIA NIM GLM-5.1
-    model: nvidia-glm
+  # ---------------------------------------------------------------------------
+  # 智能路由：从上到下依次匹配，自动跳过 API Key 未配置的模型
+  # 只需在 .env 中设置任意一个 Key，路由器就会自动使用该模型
+  # ---------------------------------------------------------------------------
+  - match: {}
+    model: claude-sonnet           # 首选：Anthropic（需 ANTHROPIC_API_KEY）
+  - match: {}
+    model: gpt-4o                  # 次选：OpenAI（需 OPENAI_API_KEY）
+  - match: {}
+    model: nvidia-glm              # 备用：NVIDIA NIM GLM-5.1（需 NVIDIA_API_KEY）
+  - match: {}
+    model: glm-5                   # 备用：智谱 GLM-5（需 ZHIPU_API_KEY）
+  - match: {}
+    model: glm-5-turbo             # 备用：智谱 GLM-5-Turbo（需 ZHIPU_API_KEY）
+  - match: {}
+    model: glm-4.7                 # 备用：智谱 GLM-4.7 免费版（需 ZHIPU_API_KEY）
   # ---------------------------------------------------------------------------
   # Kimi / Moonshot (OpenAI 兼容协议)
   # 长上下文能力突出 (128k/1M)。取消注释即可启用。

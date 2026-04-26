@@ -149,6 +149,62 @@ class TestRouteMatching:
         with pytest.raises(ConfigError, match="No route"):
             router.resolve(customer="other")
 
+    def test_resolve_skips_model_with_missing_key(self, tmp_path):
+        """When first route's model has no key, falls back to next route whose key IS set."""
+        config = {
+            "models": {
+                "no-key-model": {"provider": "openai", "model_id": "x", "api_key_env": "MISSING_KEY_XYZ", "max_tokens": 100, "tier": "standard"},
+                "has-key-model": {"provider": "openai", "model_id": "y", "api_key_env": "PRESENT_KEY_ABC", "max_tokens": 100, "tier": "standard"},
+            },
+            "routes": [
+                {"match": {}, "model": "no-key-model"},
+                {"match": {}, "model": "has-key-model"},
+            ],
+        }
+        path = tmp_path / "fallback.yaml"
+        path.write_text(yaml.dump(config))
+        with patch.dict(os.environ, {"PRESENT_KEY_ABC": "real-key-value"}, clear=False):
+            os.environ.pop("MISSING_KEY_XYZ", None)
+            router = ModelRouter(path)
+            assert router.resolve() == "has-key-model"
+
+    def test_resolve_fallback_to_any_available_when_all_routes_missing(self, tmp_path):
+        """When ALL routes have missing keys, fall back to any model that has a key."""
+        config = {
+            "models": {
+                "route-model":   {"provider": "openai", "model_id": "x", "api_key_env": "MISSING_A", "max_tokens": 100, "tier": "standard"},
+                "offroute-model": {"provider": "openai", "model_id": "y", "api_key_env": "PRESENT_B", "max_tokens": 100, "tier": "standard"},
+            },
+            "routes": [
+                {"match": {}, "model": "route-model"},
+            ],
+        }
+        path = tmp_path / "allskip.yaml"
+        path.write_text(yaml.dump(config))
+        with patch.dict(os.environ, {"PRESENT_B": "real-key-value"}, clear=False):
+            os.environ.pop("MISSING_A", None)
+            router = ModelRouter(path)
+            assert router.resolve() == "offroute-model"
+
+    def test_resolve_raises_when_no_key_anywhere(self, tmp_path):
+        """ConfigError raised when every model in the config has a missing key."""
+        config = {
+            "models": {
+                "m1": {"provider": "openai", "model_id": "x", "api_key_env": "MISSING_1", "max_tokens": 100, "tier": "standard"},
+                "m2": {"provider": "openai", "model_id": "y", "api_key_env": "MISSING_2", "max_tokens": 100, "tier": "standard"},
+            },
+            "routes": [
+                {"match": {}, "model": "m1"},
+            ],
+        }
+        path = tmp_path / "nokeys.yaml"
+        path.write_text(yaml.dump(config))
+        for var in ("MISSING_1", "MISSING_2"):
+            os.environ.pop(var, None)
+        router = ModelRouter(path)
+        with pytest.raises(ConfigError, match="No model with a valid API key"):
+            router.resolve()
+
 
 # --- Provider adapters (mocked) ---
 
