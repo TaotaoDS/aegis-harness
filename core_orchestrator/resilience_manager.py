@@ -14,18 +14,22 @@ max_retries is configurable via models_config.yaml `execution.max_retries`.
 """
 
 import json
+import logging
 import threading
 from typing import Dict, List, Optional
 
 import tiktoken
 
 from .architect_agent import ArchitectAgent, ToolLLM
+from .context_compressor import compress_task_progress
 from .evaluator import Evaluator, EvalResult
 from .knowledge_manager import KnowledgeManager
 from .llm_gateway import LLMGateway
 from .parallel_executor import ParallelExecutor
 from .qa_agent import QAAgent
 from .workspace_manager import WorkspaceManager
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_RETRIES = 3
 _DEFAULT_TOKEN_BUDGET = 100_000
@@ -80,6 +84,7 @@ class ResilienceManager:
         self._lock = threading.Lock()       # guards _token_usage and _results
         self._token_usage = 0
         self._results: List[Dict] = []
+        self._failed_model: Optional[str] = None   # last model that hit a hard failure
 
     def _track_tokens(self, gateway: LLMGateway) -> None:
         """Accumulate token usage from a gateway's history (thread-safe)."""
@@ -164,11 +169,26 @@ class ResilienceManager:
                     self._results.append(result)
                 return result
 
-            # Select tool_llm based on escalation level
-            current_tool_llm = (
-                self._escalated_tool_llm if escalation_level >= 2
-                else self._tool_llm
-            )
+            # Select tool_llm based on escalation level.
+            # At level 2+ we try to use a model different from the one that failed.
+            if escalation_level >= 2 and self._failed_model:
+                # Ask the router to skip the failed model explicitly
+                router = getattr(self._tool_llm, "_router", None)
+                if router is not None and hasattr(router, "as_escalated_tool_llm"):
+                    current_tool_llm = router.as_escalated_tool_llm(
+                        skip_model=self._failed_model
+                    )
+                    logger.info(
+                        "[Resilience] Layer-2 escalation: skipping failed model '%s'",
+                        self._failed_model,
+                    )
+                else:
+                    current_tool_llm = self._escalated_tool_llm
+            elif escalation_level >= 2:
+                current_tool_llm = self._escalated_tool_llm
+            else:
+                current_tool_llm = self._tool_llm
+
             self._bus.emit(
                 "resilience.gateway_selected",
                 task_id=task_id,
@@ -186,7 +206,48 @@ class ResilienceManager:
                 bus=self._bus,
                 hitl_manager=self._hitl_manager,
             )
-            architect.solve_task(task_file)
+            try:
+                architect.solve_task(task_file)
+            except Exception as model_exc:
+                # Model-level failure (not a task-level failure):
+                # the LLM itself is unavailable (quota, auth, persistent timeout).
+                # Compress what we know so far, write it as feedback, and let
+                # the retry loop switch to a different provider.
+                self._bus.emit(
+                    "resilience.model_failure",
+                    task_id=task_id,
+                    attempt=attempt,
+                    error=str(model_exc)[:200],
+                )
+                logger.warning(
+                    "[Resilience] Model-level failure on task '%s' attempt %d: %s",
+                    task_id, attempt, model_exc,
+                )
+                # Remember which model failed so escalation can explicitly skip it
+                self._failed_model = str(getattr(model_exc, "_model_name", "unknown"))
+
+                # Build compressed briefing for the next attempt
+                completed_so_far = architect.get_written_files(task_id)
+                try:
+                    task_content = self._workspace.read(self._ws_id, task_file)
+                except Exception:
+                    task_content = task_id
+                compressed = compress_task_progress(
+                    task_content=task_content,
+                    completed_files=completed_so_far,
+                    error_summary=f"Model failure: {type(model_exc).__name__}: {model_exc}",
+                    attempt=attempt,
+                    failed_model=self._failed_model,
+                )
+                self._workspace.write(
+                    self._ws_id,
+                    f"feedback/{task_id}_feedback.md",
+                    compressed,
+                )
+                last_issues = compressed
+                escalation_level = min(escalation_level + 1, 2)
+                continue   # retry with next model
+
             self._bus.emit("architect.solve_complete", task_id=task_id, attempt=attempt)
 
             # Evaluator: run sandbox checks on written files

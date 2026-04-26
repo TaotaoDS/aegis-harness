@@ -33,6 +33,119 @@ logger = logging.getLogger(__name__)
 
 from .llm_connector import ToolCall, ToolHandler, get_connector
 
+
+# ---------------------------------------------------------------------------
+# Failover-worthy error classification
+# ---------------------------------------------------------------------------
+
+# HTTP status codes that mean "this model/account is permanently unavailable
+# right now" — switching to a different provider will help.
+_FAILOVER_STATUS_CODES = frozenset({
+    401,  # Unauthorized / invalid API key
+    402,  # Payment required / quota exhausted
+    403,  # Forbidden / account suspended
+    529,  # Anthropic-specific "overloaded"
+})
+
+# SDK exception class names that indicate the current model is unusable
+# and a different provider should be tried.
+_FAILOVER_CLASS_NAMES = frozenset({
+    "AuthenticationError",
+    "PermissionDeniedError",
+    "InsufficientQuotaError",
+    "QuotaExceededError",
+    "BillingError",
+})
+
+
+def _is_failover_worthy(exc: BaseException) -> bool:
+    """Return True when the error signals this model is unusable and we should switch.
+
+    Distinct from is_retryable(): retryable errors are brief (429 burst, server
+    blip) and recover with backoff on the *same* model.  Failover-worthy errors
+    are persistent (bad key, quota exhausted, account suspended) and require
+    switching to a *different* model.
+    """
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        return int(status) in _FAILOVER_STATUS_CODES
+    return type(exc).__name__ in _FAILOVER_CLASS_NAMES
+
+
+# ---------------------------------------------------------------------------
+# Per-model circuit breaker
+# ---------------------------------------------------------------------------
+
+_CIRCUIT_COOLDOWN_S = 300   # 5-minute cooldown before HALF-OPEN probe
+_CIRCUIT_THRESHOLD  = 2     # consecutive failures before OPEN
+
+
+class _ModelHealthTracker:
+    """Thread-safe per-model circuit breaker (CLOSED → OPEN → HALF-OPEN → CLOSED).
+
+    CLOSED  — healthy; requests flow normally.
+    OPEN    — unhealthy; requests are skipped (failover immediately).
+    HALF-OPEN — cooldown elapsed; one probe request is allowed.  Success → CLOSED,
+               failure → OPEN again with a fresh cooldown.
+    """
+
+    def __init__(self, cooldown: float = _CIRCUIT_COOLDOWN_S, threshold: int = _CIRCUIT_THRESHOLD):
+        self._cooldown   = cooldown
+        self._threshold  = threshold
+        self._failures:   Dict[str, int]   = {}
+        self._open_until: Dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def is_healthy(self, model: str) -> bool:
+        with self._lock:
+            deadline = self._open_until.get(model)
+            if deadline is None:
+                return True                          # CLOSED
+            if time.monotonic() >= deadline:
+                del self._open_until[model]          # → HALF-OPEN
+                self._failures.pop(model, None)
+                logger.info("[Circuit] '%s' HALF-OPEN — allowing probe request", model)
+                return True
+            return False                             # OPEN
+
+    def record_success(self, model: str) -> None:
+        with self._lock:
+            was_open = model in self._open_until
+            self._failures.pop(model, None)
+            self._open_until.pop(model, None)
+        if was_open:
+            logger.info("[Circuit] '%s' back to CLOSED after successful probe", model)
+
+    def record_failure(self, model: str) -> None:
+        with self._lock:
+            n = self._failures.get(model, 0) + 1
+            self._failures[model] = n
+            if n >= self._threshold:
+                self._open_until[model] = time.monotonic() + self._cooldown
+                logger.warning(
+                    "[Circuit] '%s' OPEN after %d failures — cooldown %ds",
+                    model, n, int(self._cooldown),
+                )
+
+    def open_models(self) -> List[str]:
+        now = time.monotonic()
+        with self._lock:
+            return [m for m, d in self._open_until.items() if now < d]
+
+    def reset(self, model: Optional[str] = None) -> None:
+        """Manually close a circuit (useful for testing or admin override)."""
+        with self._lock:
+            if model:
+                self._failures.pop(model, None)
+                self._open_until.pop(model, None)
+            else:
+                self._failures.clear()
+                self._open_until.clear()
+
+
+# Module-level singleton — shared across all ModelRouter instances in the process
+_health = _ModelHealthTracker()
+
 _DEFAULT_TEMPERATURE = 0.7
 
 # ---------------------------------------------------------------------------
@@ -161,7 +274,22 @@ class ModelRouter:
             raise ConfigError("Config missing required key: 'routes'")
 
         self._models: Dict[str, Dict[str, Any]] = cfg["models"]
-        self._routes = cfg["routes"]
+        self._routes = list(cfg["routes"])   # mutable copy
+
+        # Allow env-var override of the preferred model.
+        # AEGIS_DEFAULT_MODEL=claude-sonnet  →  prepend a high-priority catch-all route.
+        preferred_override = (
+            os.environ.get("AEGIS_DEFAULT_MODEL")
+            or cfg.get("execution", {}).get("preferred_model", "")
+        )
+        if preferred_override and preferred_override in self._models:
+            self._routes.insert(0, {"match": {}, "model": preferred_override})
+            logger.info("[ModelRouter] Preferred model override: '%s'", preferred_override)
+        elif preferred_override:
+            logger.warning(
+                "[ModelRouter] AEGIS_DEFAULT_MODEL='%s' not found in models config — ignored",
+                preferred_override,
+            )
 
         self._log_key_availability()
 
@@ -388,26 +516,139 @@ class ModelRouter:
             tool_handler=tool_handler,
         )
 
+    # -----------------------------------------------------------------------
+    # Failover helpers
+    # -----------------------------------------------------------------------
+
+    def _failover_candidates(self, preferred: str) -> List[str]:
+        """Return an ordered list of models to try: preferred first, then the rest.
+
+        Only includes models that currently have a valid API key.  The preferred
+        model is always first (even if its circuit is currently OPEN — we still
+        include it so the HALF-OPEN probe can happen naturally).
+        """
+        available = self.available_models()
+        others = [m for m in available if m != preferred]
+        return ([preferred] if preferred in self._models else []) + others
+
+    def call_with_failover(self, preferred_model: str, text: str) -> str:
+        """Call ``preferred_model``, failing over to alternatives on persistent errors.
+
+        Transient errors (429 burst, 5xx blip) are retried on the *same* model
+        via the existing ``with_retry`` logic inside ``call()``.
+
+        Failover-worthy errors (bad key, quota exhausted, account suspended)
+        trigger an immediate switch to the next healthy model in priority order.
+        The circuit breaker is updated on each outcome.
+
+        Returns the response text.  Raises the last exception only if every
+        candidate model was tried and failed.
+        """
+        candidates = self._failover_candidates(preferred_model)
+        last_exc: Optional[Exception] = None
+
+        for model_name in candidates:
+            if not _health.is_healthy(model_name):
+                logger.debug("[Failover] Skipping '%s' — circuit OPEN", model_name)
+                continue
+            try:
+                result = self.call(model_name, text)
+                _health.record_success(model_name)
+                if model_name != preferred_model:
+                    logger.warning(
+                        "[Failover] Used '%s' (preferred '%s' unavailable)",
+                        model_name, preferred_model,
+                    )
+                return result
+            except Exception as exc:
+                if _is_failover_worthy(exc):
+                    _health.record_failure(model_name)
+                    logger.warning(
+                        "[Failover] '%s' failed (%s: %s) — trying next model",
+                        model_name, type(exc).__name__, str(exc)[:120],
+                    )
+                    last_exc = exc
+                    continue
+                raise   # non-failover errors propagate immediately
+
+        if last_exc:
+            raise last_exc
+        raise ConfigError(
+            f"All failover candidates exhausted for '{preferred_model}'. "
+            f"Tried: {candidates}. Check API keys and account status."
+        )
+
+    def call_with_tools_failover(
+        self,
+        preferred_model: str,
+        *,
+        system: str,
+        user_prompt: str,
+        tools: List[Dict[str, Any]],
+        max_rounds: int = 10,
+        tool_handler: ToolHandler = None,
+    ) -> List[ToolCall]:
+        """call_with_tools() with the same multi-model failover semantics."""
+        candidates = self._failover_candidates(preferred_model)
+        last_exc: Optional[Exception] = None
+
+        for model_name in candidates:
+            if not _health.is_healthy(model_name):
+                continue
+            try:
+                result = self.call_with_tools(
+                    model_name,
+                    system=system,
+                    user_prompt=user_prompt,
+                    tools=tools,
+                    max_rounds=max_rounds,
+                    tool_handler=tool_handler,
+                )
+                _health.record_success(model_name)
+                if model_name != preferred_model:
+                    logger.warning(
+                        "[Failover] Tool-use used '%s' (preferred '%s' unavailable)",
+                        model_name, preferred_model,
+                    )
+                return result
+            except Exception as exc:
+                if _is_failover_worthy(exc):
+                    _health.record_failure(model_name)
+                    logger.warning(
+                        "[Failover] Tool-use '%s' failed (%s) — trying next",
+                        model_name, type(exc).__name__,
+                    )
+                    last_exc = exc
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
+        raise ConfigError(f"All failover candidates exhausted for tool-use '{preferred_model}'.")
+
+    # -----------------------------------------------------------------------
+    # LLM callable factories
+    # -----------------------------------------------------------------------
+
     def as_llm(self, **context: str) -> Callable[[str], str]:
         """Return a Callable[[str], str] suitable for LLMGateway(llm=...).
 
-        The model is resolved once at creation time based on the context.
+        The preferred model is resolved at creation time; the actual model used
+        at call time may differ if the preferred model's circuit is OPEN.
         """
-        model_name = self.resolve(**context)
+        preferred = self.resolve(**context)
 
         def _llm(text: str) -> str:
-            return self.call(model_name, text)
+            return self.call_with_failover(preferred, text)
 
         return _llm
 
     def as_tool_llm(self, **context: str) -> Callable:
-        """Return a callable for Tool Use calls.
+        """Return a callable for Tool Use calls with failover.
 
         Signature: (system, user_prompt, tools, tool_handler=None) -> List[ToolCall]
-
-        The model is resolved once at creation time based on the context.
         """
-        model_name = self.resolve(**context)
+        preferred = self.resolve(**context)
 
         def _tool_llm(
             system: str,
@@ -415,8 +656,8 @@ class ModelRouter:
             tools: List[Dict[str, Any]],
             tool_handler: ToolHandler = None,
         ) -> List[ToolCall]:
-            return self.call_with_tools(
-                model_name,
+            return self.call_with_tools_failover(
+                preferred,
                 system=system,
                 user_prompt=user_prompt,
                 tools=tools,
@@ -424,3 +665,36 @@ class ModelRouter:
             )
 
         return _tool_llm
+
+    def as_escalated_tool_llm(self, skip_model: Optional[str] = None, **context: str) -> Callable:
+        """Return a tool_llm callable that skips ``skip_model`` (the failed preferred).
+
+        Used by ResilienceManager for Layer-2 escalation: force a different model
+        than the one that failed in Layer 1.
+        """
+        candidates = [
+            m for m in self._failover_candidates(self.resolve(**context))
+            if m != skip_model
+        ]
+        if not candidates:
+            # If we somehow have no alternatives, fall back to resolve normally
+            candidates = [self.resolve(**context)]
+
+        preferred = candidates[0]
+        logger.info("[Escalation] Escalated tool_llm using '%s' (skipping '%s')", preferred, skip_model)
+
+        def _escalated_tool_llm(
+            system: str,
+            user_prompt: str,
+            tools: List[Dict[str, Any]],
+            tool_handler: ToolHandler = None,
+        ) -> List[ToolCall]:
+            return self.call_with_tools_failover(
+                preferred,
+                system=system,
+                user_prompt=user_prompt,
+                tools=tools,
+                tool_handler=tool_handler,
+            )
+
+        return _escalated_tool_llm

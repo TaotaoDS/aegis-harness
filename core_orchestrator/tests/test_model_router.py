@@ -3,12 +3,12 @@
 import os
 import textwrap
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 
 import pytest
 import yaml
 
-from core_orchestrator.model_router import ModelRouter, ConfigError
+from core_orchestrator.model_router import ModelRouter, ConfigError, _health, _is_failover_worthy
 from core_orchestrator.llm_gateway import LLMGateway
 
 
@@ -204,6 +204,140 @@ class TestRouteMatching:
         router = ModelRouter(path)
         with pytest.raises(ConfigError, match="No model with a valid API key"):
             router.resolve()
+
+
+# --- Circuit breaker ---
+
+class TestCircuitBreaker:
+    def setup_method(self):
+        _health.reset()
+
+    def test_healthy_by_default(self):
+        assert _health.is_healthy("any-model") is True
+
+    def test_opens_after_threshold_failures(self):
+        for _ in range(_health._threshold):
+            _health.record_failure("m")
+        assert _health.is_healthy("m") is False
+
+    def test_single_failure_below_threshold_stays_closed(self):
+        _health.record_failure("m")
+        assert _health.is_healthy("m") is True
+
+    def test_success_resets_failure_count(self):
+        _health.record_failure("m")
+        _health.record_success("m")
+        _health.record_failure("m")          # single failure again
+        assert _health.is_healthy("m") is True
+
+    def test_reset_closes_circuit(self):
+        for _ in range(_health._threshold):
+            _health.record_failure("m")
+        _health.reset("m")
+        assert _health.is_healthy("m") is True
+
+    def test_open_models_lists_tripped_models(self):
+        for _ in range(_health._threshold):
+            _health.record_failure("bad-model")
+        assert "bad-model" in _health.open_models()
+
+
+class TestFailoverWorthy:
+    def test_401_is_failover(self):
+        exc = Exception()
+        exc.status_code = 401
+        assert _is_failover_worthy(exc) is True
+
+    def test_402_is_failover(self):
+        exc = Exception()
+        exc.status_code = 402
+        assert _is_failover_worthy(exc) is True
+
+    def test_429_is_not_failover(self):
+        exc = Exception()
+        exc.status_code = 429
+        assert _is_failover_worthy(exc) is False
+
+    def test_500_is_not_failover(self):
+        exc = Exception()
+        exc.status_code = 500
+        assert _is_failover_worthy(exc) is False
+
+    def test_auth_error_name_is_failover(self):
+        class AuthenticationError(Exception): pass
+        assert _is_failover_worthy(AuthenticationError()) is True
+
+    def test_value_error_is_not_failover(self):
+        assert _is_failover_worthy(ValueError("bad")) is False
+
+
+class TestCallWithFailover:
+    def setup_method(self):
+        _health.reset()
+
+    def _make_router(self, tmp_path):
+        """Create a router with two models using api_key: literal (not env-var) so
+        availability is always True regardless of environment during the call."""
+        config = {
+            "models": {
+                "primary":   {"provider": "openai", "model_id": "gpt-4o",     "api_key": "real-a", "max_tokens": 100, "tier": "standard"},
+                "secondary": {"provider": "openai", "model_id": "gpt-4-mini", "api_key": "real-b", "max_tokens": 100, "tier": "standard"},
+            },
+            "routes": [{"match": {}, "model": "primary"}],
+        }
+        path = tmp_path / "fo.yaml"
+        path.write_text(yaml.dump(config))
+        return ModelRouter(path)
+
+    def test_uses_preferred_when_healthy(self, tmp_path):
+        router = self._make_router(tmp_path)
+        with patch.object(router, "call", return_value="ok") as mock_call:
+            result = router.call_with_failover("primary", "hello")
+        assert result == "ok"
+        mock_call.assert_called_once_with("primary", "hello")
+
+    def test_switches_to_secondary_on_failover_error(self, tmp_path):
+        router = self._make_router(tmp_path)
+        auth_exc = Exception("Unauthorized")
+        auth_exc.status_code = 401
+
+        call_count = {"n": 0}
+        def side_effect(model, text):
+            call_count["n"] += 1
+            if model == "primary":
+                raise auth_exc
+            return "secondary-response"
+
+        with patch.object(router, "call", side_effect=side_effect):
+            result = router.call_with_failover("primary", "hello")
+
+        assert result == "secondary-response"
+        assert call_count["n"] == 2
+
+    def test_raises_when_all_candidates_fail(self, tmp_path):
+        router = self._make_router(tmp_path)
+        auth_exc = Exception("Unauthorized")
+        auth_exc.status_code = 401
+
+        with patch.object(router, "call", side_effect=auth_exc):
+            with pytest.raises(Exception):
+                router.call_with_failover("primary", "hello")
+
+    def test_non_failover_error_propagates_immediately(self, tmp_path):
+        router = self._make_router(tmp_path)
+        val_err = ValueError("bad input")
+        call_count = {"n": 0}
+
+        def side_effect(model, text):
+            call_count["n"] += 1
+            raise val_err
+
+        with patch.object(router, "call", side_effect=side_effect):
+            with pytest.raises(ValueError):
+                router.call_with_failover("primary", "hello")
+
+        # Should only have been called once (no failover for non-failover errors)
+        assert call_count["n"] == 1
 
 
 # --- Provider adapters (mocked) ---

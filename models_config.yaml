@@ -187,6 +187,9 @@ execution:
   eval_timeout: 30        # Evaluator 沙盒超时秒数
   token_budget: 100000    # 全局 token 预算
   token_threshold: 0.8    # 预算使用率熔断阈值 (80%)
+  # preferred_model: ${AEGIS_DEFAULT_MODEL}   # 取消注释可强制指定首选模型
+  #   示例 .env 配置: AEGIS_DEFAULT_MODEL=claude-sonnet
+  #   留空则按 routes 顺序自动选择第一个有可用 Key 的模型
 
 # =============================================================================
 # 路由规则 (从上到下匹配，第一条命中即返回；空 match 为兜底)
