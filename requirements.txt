@@ -52,8 +52,8 @@ tenacity>=8.2.0          # retry decorator (with_retry in retry_utils.py)
 # JWT creation and validation (access + refresh tokens)
 python-jose[cryptography]>=3.3.0
 
-# Password hashing (bcrypt)
-passlib[bcrypt]>=1.7.4
+# Password hashing (bcrypt direct — passlib 1.7.4 is incompatible with bcrypt>=4)
+bcrypt>=4.0.0
 
 # Fernet symmetric encryption for stored API keys (optional, recommended)
 cryptography>=42.0

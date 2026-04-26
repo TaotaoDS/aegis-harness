@@ -39,13 +39,7 @@ try:
 except ImportError:                             # pragma: no cover
     _JOSE_AVAILABLE = False
 
-try:
-    from passlib.context import CryptContext
-    _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    _PASSLIB_AVAILABLE = True
-except ImportError:                             # pragma: no cover
-    _PASSLIB_AVAILABLE = False
-    _pwd_context = None  # type: ignore[assignment]
+import bcrypt as _bcrypt
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -77,17 +71,11 @@ class TokenPayload:
 # ---------------------------------------------------------------------------
 
 def hash_password(plain: str) -> str:
-    """Return a bcrypt hash of *plain*.  Raises RuntimeError if passlib is absent."""
-    if not _PASSLIB_AVAILABLE:
-        raise RuntimeError("passlib[bcrypt] is required for password hashing")
-    return _pwd_context.hash(plain)
+    return _bcrypt.hashpw(plain.encode(), _bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Return True if *plain* matches *hashed*."""
-    if not _PASSLIB_AVAILABLE:
-        raise RuntimeError("passlib[bcrypt] is required for password verification")
-    return _pwd_context.verify(plain, hashed)
+    return _bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 # ---------------------------------------------------------------------------
