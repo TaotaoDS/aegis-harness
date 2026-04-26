@@ -1,24 +1,38 @@
 """Event bus: real-time observability for the multi-agent pipeline.
 
-Provides two output backends:
+Provides three output backends:
 1. Terminal renderer — ANSI-colored status stream on sys.stderr
 2. File audit logger — append-only execution.log for ``tail -f`` monitoring
+3. JsonEventBus — structured JSON lines for machine-parseable log aggregation
 
 Usage:
     bus = bus_from_workspace(workspace, workspace_id)
     bus.emit("architect.solving", task_id="task_1")
 
+    # Structured JSON backend:
+    bus = bus_from_workspace(workspace, workspace_id, structured=True, job_id="abc123")
+    bus.emit("architect.solving", task_id="task_1")
+    # → {"ts": "2026-04-26T10:00:00Z", "job_id": "abc123", "event": "architect.solving", "task_id": "task_1"}
+
 Agents receive ``bus=None`` (defaults to NullBus) so all existing
 callers and tests work unchanged with zero output.
 """
 
+import json
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, IO, Optional
 
 from .workspace_manager import WorkspaceManager
+
+
+# ---------------------------------------------------------------------------
+# Module-level logger pool — keyed by resolved log_dir to prevent handle leaks
+# ---------------------------------------------------------------------------
+
+_LOGGER_POOL: Dict[str, logging.Logger] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -119,21 +133,27 @@ class EventBus:
         self._enable_file_log = enable_file_log
         self._use_color = hasattr(self._stream, "isatty") and self._stream.isatty()
 
-        # File logger setup
+        # File logger setup — pooled by resolved log_dir to prevent handle leaks.
+        # Multiple EventBus instances pointing at the same directory share one
+        # Logger (and therefore one FileHandler), so handler count stays at 1.
         self._logger: Optional[logging.Logger] = None
         if enable_file_log:
             log_dir.mkdir(parents=True, exist_ok=True)
             log_path = log_dir / AUDIT_LOG_FILENAME
-            logger = logging.getLogger(f"aegis_harness.audit.{id(self)}")
-            logger.setLevel(logging.INFO)
-            # Avoid duplicate handlers on repeated construction
-            if not logger.handlers:
-                handler = logging.FileHandler(str(log_path), mode="a", encoding="utf-8")
-                handler.setFormatter(
-                    logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-                )
-                logger.addHandler(handler)
-            self._logger = logger
+            pool_key = str(log_dir.resolve())
+            if pool_key not in _LOGGER_POOL:
+                logger_name = f"aegis_harness.audit.{pool_key}"
+                logger = logging.getLogger(logger_name)
+                logger.setLevel(logging.INFO)
+                logger.propagate = False
+                if not logger.handlers:
+                    handler = logging.FileHandler(str(log_path), mode="a", encoding="utf-8")
+                    handler.setFormatter(
+                        logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+                    )
+                    logger.addHandler(handler)
+                _LOGGER_POOL[pool_key] = logger
+            self._logger = _LOGGER_POOL[pool_key]
 
     def emit(self, event: str, **kwargs: Any) -> None:
         """Emit a named event with structured data to all backends."""
@@ -178,6 +198,70 @@ class NullBus:
 
 
 # ---------------------------------------------------------------------------
+# JsonEventBus — structured JSON-lines backend for log aggregation
+# ---------------------------------------------------------------------------
+
+class JsonEventBus:
+    """Writes one JSON line per event to an audit log file.
+
+    Each line is valid JSON containing at minimum:
+        {"ts": "<ISO-8601 UTC>", "job_id": "<id>", "event": "<name>", ...kwargs}
+
+    Logger handles are pooled by ``log_dir`` path — instantiating
+    ``JsonEventBus`` multiple times for the same directory results in exactly
+    one ``FileHandler``, preventing file-descriptor leaks.
+
+    Args:
+        log_dir:  Directory that will contain ``execution.log``.
+        job_id:   Correlation ID injected into every emitted record.
+        enable_file_log: Set False to suppress file output (for testing).
+        stream:   Optional IO stream to also write JSON lines to (for testing).
+    """
+
+    def __init__(
+        self,
+        log_dir: Path,
+        *,
+        job_id: str = "",
+        enable_file_log: bool = True,
+        stream: Optional[IO] = None,
+    ) -> None:
+        self._job_id = job_id
+        self._stream = stream
+        self._logger: Optional[logging.Logger] = None
+
+        if enable_file_log:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / AUDIT_LOG_FILENAME
+            pool_key = f"json:{log_dir.resolve()}"
+            if pool_key not in _LOGGER_POOL:
+                logger_name = f"aegis_harness.json.{pool_key}"
+                logger = logging.getLogger(logger_name)
+                logger.setLevel(logging.INFO)
+                logger.propagate = False
+                if not logger.handlers:
+                    handler = logging.FileHandler(str(log_path), mode="a", encoding="utf-8")
+                    handler.setFormatter(logging.Formatter("%(message)s"))
+                    logger.addHandler(handler)
+                _LOGGER_POOL[pool_key] = logger
+            self._logger = _LOGGER_POOL[pool_key]
+
+    def emit(self, event: str, **kwargs: Any) -> None:
+        record: Dict[str, Any] = {
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "job_id": self._job_id,
+            "event": event,
+            **kwargs,
+        }
+        line = json.dumps(record, default=str)
+        if self._logger:
+            self._logger.info(line)
+        if self._stream is not None:
+            self._stream.write(line + "\n")
+            self._stream.flush()
+
+
+# ---------------------------------------------------------------------------
 # ListBus — test double that captures events
 # ---------------------------------------------------------------------------
 
@@ -209,7 +293,9 @@ def bus_from_workspace(
     stream: Optional[IO] = None,
     enable_terminal: bool = True,
     enable_file_log: bool = True,
-) -> EventBus:
+    structured: bool = False,
+    job_id: str = "",
+) -> "EventBus | JsonEventBus":
     """Create an EventBus that logs to the workspace's _workspace/ directory.
 
     The audit log is written to:
@@ -217,12 +303,23 @@ def bus_from_workspace(
 
     If the workspace is not in isolated mode, the log goes to:
         <workspace_root>/<workspace_id>/execution.log
+
+    Args:
+        structured: When True, returns a ``JsonEventBus`` instead of the
+                    default ANSI terminal bus.  Each log line is a JSON object.
+        job_id:     Correlation ID injected into every JSON record (only used
+                    when ``structured=True``).
     """
     ws_root = workspace._base / workspace_id
-    if workspace.isolated:
-        log_dir = ws_root / "_workspace"
-    else:
-        log_dir = ws_root
+    log_dir = ws_root / "_workspace" if workspace.isolated else ws_root
+
+    if structured:
+        return JsonEventBus(
+            log_dir=log_dir,
+            job_id=job_id,
+            enable_file_log=enable_file_log,
+            stream=stream,
+        )
     return EventBus(
         log_dir=log_dir,
         stream=stream,

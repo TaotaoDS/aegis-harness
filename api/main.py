@@ -30,6 +30,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from .rate_limit import limiter
+from .metrics import metrics_endpoint
 from .routes.auth import router as auth_router
 from .routes.jobs import router as jobs_router
 from .routes.stream import router as stream_router
@@ -168,6 +169,8 @@ app.include_router(approvals_router)
 app.include_router(interview_router)
 app.include_router(settings_router)
 app.include_router(mcp_router)
+
+app.add_api_route("/metrics", metrics_endpoint, include_in_schema=False)
 
 
 @app.get("/healthz")
