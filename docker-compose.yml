@@ -51,10 +51,11 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      # ── Auth ─────────────────────────────────────────────────────────────
+      SECRET_KEY: ${SECRET_KEY}
+
       # ── DB ───────────────────────────────────────────────────────────────
-      DATABASE_URL: >-
-        postgresql://${POSTGRES_USER:-harness}:${POSTGRES_PASSWORD:-harness_secret}
-        @postgres:5432/${POSTGRES_DB:-harness}
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-harness}:${POSTGRES_PASSWORD:-harness_secret}@postgres:5432/${POSTGRES_DB:-harness}"
 
       # ── LLM API Keys (pass-through from host .env) ────────────────────
       ANTHROPIC_API_KEY:  ${ANTHROPIC_API_KEY:-}
@@ -92,6 +93,8 @@ services:
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
+      # Server-side proxy target — must use docker-compose service name, not localhost
+      BACKEND_URL: "http://backend:${BACKEND_PORT:-8000}"
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
 

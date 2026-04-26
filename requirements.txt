@@ -64,5 +64,8 @@ slowapi>=0.1.9
 # Email validation (used by Pydantic EmailStr in auth routes)
 email-validator>=2.0.0
 
+# Observability
+prometheus-client>=0.20.0   # /metrics endpoint (harness_jobs_total, etc.)
+
 # Testing
 pytest>=8.0.0           # Test runner
