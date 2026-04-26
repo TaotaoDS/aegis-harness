@@ -22,9 +22,10 @@ wrapper below.  Both helpers are no-ops when the DB is not available
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..deps import CurrentUser, get_current_user
+from ..rate_limit import limiter
 from ..event_bridge import AsyncQueueBus
 from ..hitl_manager import HITLManager
 from ..interview_manager import InterviewManager
@@ -135,7 +136,9 @@ async def get_jobs(current_user: CurrentUser = Depends(get_current_user)):
 
 
 @router.post("", response_model=JobOut, status_code=201)
+@limiter.limit("60/minute")
 async def create_and_start_job(
+    request: Request,
     body: JobCreate,
     current_user: CurrentUser = Depends(get_current_user),
 ):

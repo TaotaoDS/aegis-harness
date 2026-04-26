@@ -15,6 +15,7 @@ task executor -- each solve_task() call is independent.
 import json
 from typing import Any, Callable, Dict, List, Optional
 
+from .guardrails import ContentModerator, GuardRailViolation, PromptGuard
 from .llm_connector import ToolCall
 from .workspace_manager import WorkspaceManager
 
@@ -295,6 +296,12 @@ class ArchitectAgent:
         task_id = self._task_id_from_filename(task_filename)
         feedback_context = feedback or self._get_feedback_context(task_id)
 
+        # --- Guardrail Layer 1: prompt injection check ---
+        guard = PromptGuard.check_input(task_content)
+        if not guard.allowed:
+            self._bus.emit("guardrail.violation", task_id=task_id, reason=guard.reason)
+            raise GuardRailViolation(guard.reason)
+
         self._bus.emit("architect.solving", task_id=task_id)
 
         # Detect existing codebase for context injection
@@ -343,6 +350,17 @@ class ArchitectAgent:
                                 filepath=filepath,
                             )
                             continue
+
+                    # --- Guardrail Layer 2: screen generated content ---
+                    mod = ContentModerator.screen_output(content)
+                    if not mod.allowed:
+                        self._bus.emit(
+                            "guardrail.content_blocked",
+                            task_id=task_id,
+                            filepath=filepath,
+                            reason=mod.reason,
+                        )
+                        continue
 
                     full_path = (
                         f"deliverables/{filepath}"

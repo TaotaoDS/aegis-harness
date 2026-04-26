@@ -13,6 +13,12 @@ v1.0.0 changes
        mid-flight when the process died are marked "interrupted" so
        operators know they need attention.
     3. Disposes the DB engine cleanly on shutdown.
+
+v1.1.0 changes (GuardrailsLayer)
+---------------------------------
+* Added slowapi rate limiting (10/min on auth, 60/min on job creation).
+* DEV_MODE startup warning logged at WARNING level when SECRET_KEY unset.
+* /healthz returns ``dev_mode: true`` when authentication is disabled.
 """
 
 import logging
@@ -20,7 +26,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
+from .rate_limit import limiter
 from .routes.auth import router as auth_router
 from .routes.jobs import router as jobs_router
 from .routes.stream import router as stream_router
@@ -41,6 +50,15 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown hooks."""
 
     # ── Startup ──────────────────────────────────────────────────────────
+
+    # Security: warn loudly when authentication is disabled
+    from .auth import DEV_MODE
+    if DEV_MODE:
+        logger.warning(
+            "[SECURITY] DEV_MODE=True — authentication is DISABLED. "
+            "Set SECRET_KEY before deploying to production."
+        )
+
     db_ok = await _init_db()
     if db_ok:
         logger.info("[DB] PostgreSQL connection established — persistence enabled")
@@ -130,6 +148,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── Rate limiting ────────────────────────────────────────────────────────────
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Allow Next.js dev server (port 3000) and production origin
 app.add_middleware(
     CORSMiddleware,
@@ -150,9 +172,14 @@ app.include_router(mcp_router)
 
 @app.get("/healthz")
 async def health():
+    from .auth import DEV_MODE
     try:
         from db.connection import is_db_available
         db_status = "connected" if is_db_available() else "file-only"
     except Exception:   # noqa: BLE001
         db_status = "unavailable"
-    return {"status": "ok", "version": "0.0.1", "db": db_status}
+
+    response: dict = {"status": "ok", "version": "0.0.1", "db": db_status}
+    if DEV_MODE:
+        response["dev_mode"] = True
+    return response

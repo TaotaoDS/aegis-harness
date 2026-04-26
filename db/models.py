@@ -115,6 +115,10 @@ class TenantModel(Base):
     plan       = Column(String(50),  nullable=False, default="free")
     is_active  = Column(Boolean,     nullable=False, default=True)
     created_at = Column(String(50),  nullable=False)
+    # v1.1.0 — quota management (added in migration 006)
+    token_usage_daily  = Column(Integer, nullable=False, default=0)
+    token_budget_daily = Column(Integer, nullable=True)   # NULL = unlimited
+    last_usage_reset   = Column(String(10), nullable=True)  # ISO date "YYYY-MM-DD"
 
 
 class UserModel(Base):

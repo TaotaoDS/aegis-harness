@@ -19,15 +19,15 @@ return 503 with a clear message.  GET /auth/me returns the synthetic dev
 user so the frontend can always render the UI.
 """
 
-from __future__ import annotations
-
 import re
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, field_validator
+
+from api.rate_limit import limiter
 
 from api.auth import (
     DEV_MODE,
@@ -199,7 +199,8 @@ async def _get_valid_refresh_token(session, token_hash: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest, response: Response):
+@limiter.limit("10/minute")
+async def register(request: Request, body: RegisterRequest, response: Response):
     """Create a new tenant and an owner account.
 
     Returns the access token in the response body AND sets both tokens as
@@ -287,7 +288,8 @@ async def register(body: RegisterRequest, response: Response):
 # ---------------------------------------------------------------------------
 
 @router.post("/login")
-async def login(body: LoginRequest, response: Response):
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest, response: Response):
     """Exchange credentials for a token pair."""
     _require_auth_configured()
 
@@ -379,7 +381,7 @@ async def login(body: LoginRequest, response: Response):
 @router.post("/refresh")
 async def refresh_tokens(
     response: Response,
-    aegis_refresh: str | None = Cookie(default=None),
+    aegis_refresh: Optional[str] = Cookie(default=None),
 ):
     """Rotate the refresh token and issue a new access token."""
     _require_auth_configured()
@@ -441,7 +443,7 @@ async def refresh_tokens(
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
     response: Response,
-    aegis_refresh: str | None = Cookie(default=None),
+    aegis_refresh: Optional[str] = Cookie(default=None),
 ):
     """Revoke the refresh token and clear auth cookies."""
     if aegis_refresh:
