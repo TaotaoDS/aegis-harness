@@ -1,7 +1,7 @@
 # AegisHarness — Agent Operating Manual
 
-> **Version**: v0.0.1  
-> **Accuracy date**: 2026-04-23 · 598 tests passing  
+> **Version**: v0.1.1  
+> **Accuracy date**: 2026-04-26 · 912 tests passing  
 > **Audience**: AI agents (Claude, GPT-4, etc.) working on this codebase.  
 > Read `ARCHITECTURE.md` for the complete system design reference.
 
@@ -74,11 +74,75 @@ You **do not write code directly** for user requirements. You orchestrate specia
 1. Run existing tests: `python -m pytest core_orchestrator/tests/ -v`
 2. Read the relevant source files — never assume an interface.
 3. Write tests first, then implementation.
-4. Re-run full test suite. All **598 tests** must still pass.
+4. Re-run full test suite. All **912 tests** must still pass.
 
 ---
 
 ## 3. Safety Guardrails (Non-Negotiable)
+
+### 3.0 Core Architectural Constraints (v0.1.1)
+
+Three constraints are **hard rules** — every task execution path must obey them.
+
+#### 3.0.1 Sandbox Isolation
+
+All generated-code execution **must** route through `core_orchestrator/sandbox.py`.  
+Direct `subprocess.run()` calls on user-supplied or LLM-generated code are **forbidden**.
+
+```python
+# CORRECT — always use SandboxFactory
+from core_orchestrator.sandbox import SandboxFactory, SandboxSpec
+sandbox = SandboxFactory.create()
+result = sandbox.run([sys.executable, str(script_path)], workspace_dir=ws, spec=SandboxSpec())
+
+# FORBIDDEN — no bare subprocess on generated code
+subprocess.run(["python", script], ...)   # ← never do this
+```
+
+`ContentPreScreener.check_file(path)` must be called **before** sandbox execution.  
+If `screen.allowed` is False, return `EvalResult(success=False)` immediately — do not execute.
+
+#### 3.0.2 Security Guardrails
+
+All task inputs and file-write operations **must** pass through `core_orchestrator/guardrails.py`.
+
+```python
+from core_orchestrator.guardrails import PromptGuard, ContentModerator, GuardRailViolation
+
+# Before embedding user content in any LLM prompt:
+guard = PromptGuard.check_input(task_content)
+if not guard.allowed:
+    bus.emit("guardrail.violation", reason=guard.reason)
+    raise GuardRailViolation(guard.reason)
+
+# Before writing any LLM-generated file to disk:
+mod = ContentModerator.screen_output(file_content)
+if not mod.allowed:
+    bus.emit("guardrail.content_blocked", reason=mod.reason)
+    # skip the write — do not raise; continue to next file
+```
+
+`GuardRailViolation` is non-retryable — do **not** pass it to the resilience retry loop.  
+Disable for local dev only: `GUARDRAILS_ENABLED=false`.
+
+#### 3.0.3 Structured Observability
+
+Event logging **must** use `JsonEventBus` with a `job_id` correlation token.  
+Plain-text `EventBus` is permitted for interactive terminal output only.
+
+```python
+from core_orchestrator.event_bus import bus_from_workspace
+
+# Structured JSON logging (production / API-driven jobs):
+bus = bus_from_workspace(workspace, workspace_id, structured=True, job_id=job_id)
+bus.emit("architect.solving", task_id=task_id)
+# → {"ts": "2026-04-26T10:00:00Z", "job_id": "abc123", "event": "architect.solving", "task_id": "task_1"}
+```
+
+Every `emit()` call must include enough kwargs to reconstruct what happened without reading the source.  
+Never create a new `logging.Logger` keyed by `id(self)` — use `bus_from_workspace` or `JsonEventBus` directly.
+
+---
 
 ### 3.1 Workspace Isolation
 
@@ -110,7 +174,7 @@ Default pipeline redacts: email addresses, phone numbers (CN/US/international), 
 
 ### 3.5 Zero Blast Radius
 
-Every change to existing files must preserve all 598 test results. Before finishing any task:
+Every change to existing files must preserve all 912 test results. Before finishing any task:
 ```bash
 python -m pytest core_orchestrator/tests/ -v --tb=short
 ```
@@ -293,7 +357,7 @@ python -m pytest core_orchestrator/tests/test_resilience_manager.py -v
 python -m pytest core_orchestrator/tests/ --cov=core_orchestrator --cov-report=term-missing
 ```
 
-**Current state**: **598 tests, all passing** (2026-04-23, AegisHarness v0.0.1).
+**Current state**: **912 tests, all passing** (2026-04-26, AegisHarness v0.1.1).
 
 ---
 
@@ -321,6 +385,10 @@ python -m pytest core_orchestrator/tests/ --cov=core_orchestrator --cov-report=t
 | `test_checkpoint.py` | DB checkpoints | save/load checkpoint |
 | `test_reflection_agent.py` | ReflectionAgent | Lesson extraction |
 | `test_event_bus.py` | EventBus | Emit, subscribe, NullBus |
+| `test_observability.py` | JsonEventBus, /metrics | JSON output, job_id injection, logger pool, Prometheus |
+| `test_sandbox.py` | sandbox.py | ContentPreScreener, ResourceLimitSandbox, DockerSandbox, SandboxFactory |
+| `test_guardrails.py` | guardrails.py | PromptGuard injection patterns, ContentModerator, ArchitectAgent integration |
+| `test_guardrails_api.py` | quota.py, main.py | QuotaManager, DEV_MODE healthz, rate limiting (slowapi) |
 | `test_json_parser.py` | json_parser | LLM JSON extraction |
 | `test_translation_gateway.py` | TranslationGateway | Style adaptation |
 | `test_user_profile.py` | UserProfile | Persona, style instructions |
@@ -344,7 +412,12 @@ python -m pytest core_orchestrator/tests/ --cov=core_orchestrator --cov-report=t
 | `core_orchestrator/user_profile.py` | User persona + interview style adaptation |
 | `core_orchestrator/pii_sanitizer.py` | PII redaction pipeline |
 | `core_orchestrator/workspace_manager.py` | Isolated per-job filesystem sandbox |
+| `core_orchestrator/sandbox.py` | ContentPreScreener + SandboxFactory (DockerSandbox / ResourceLimitSandbox) |
+| `core_orchestrator/guardrails.py` | PromptGuard (injection detection) + ContentModerator (credential/payload screening) |
 | `api/main.py` | FastAPI app factory + DB lifespan + crash recovery |
+| `api/metrics.py` | Prometheus metrics registry + `/metrics` endpoint |
+| `api/quota.py` | QuotaManager — per-tenant daily token budget enforcement |
+| `api/rate_limit.py` | Shared slowapi Limiter instance (10/min auth, 60/min jobs) |
 | `api/routes/mcp.py` | MCP CRUD + probe REST endpoints |
 | `api/settings_service.py` | DB-backed global settings KV store |
 | `db/connection.py` | Async PostgreSQL engine + session factory |
