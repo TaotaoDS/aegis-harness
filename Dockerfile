@@ -48,6 +48,12 @@ COPY --chown=harness:harness . .
 # (Docker named volumes mount as root; this sets correct ownership at build time)
 RUN mkdir -p /app/workspaces && chown harness:harness /app/workspaces
 
+# Install Playwright Chromium + system deps (must run as root before USER switch)
+# --with-deps installs libnss3, libatk-bridge, libxcomposite, etc. via apt-get
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN /opt/venv/bin/playwright install --with-deps chromium \
+ && chown -R harness:harness /opt/playwright-browsers
+
 USER harness
 
 # Workspaces volume — generated files survive container restarts when mounted

@@ -448,7 +448,13 @@ class ModelRouter:
         Transient API errors (429, 5xx, rate-limit exceptions) are retried
         automatically using exponential back-off via :mod:`.retry_utils`.
         Non-transient errors propagate immediately.
+
+        Raises InsufficientCreditError (→ HTTP 402) when the active billing
+        context has a depleted credit balance.
         """
+        from .billing import check_credit
+        check_credit()
+
         model_cfg = self._models.get(model_name)
         if not model_cfg:
             raise ConfigError(f"Unknown model: '{model_name}'")
@@ -490,7 +496,13 @@ class ModelRouter:
         tool result. This enables tools like read_file to return real content.
 
         Returns a list of ToolCall objects collected across all rounds.
+
+        Raises InsufficientCreditError (→ HTTP 402) when the active billing
+        context has a depleted credit balance.
         """
+        from .billing import check_credit
+        check_credit()
+
         model_cfg = self._models.get(model_name)
         if not model_cfg:
             raise ConfigError(f"Unknown model: '{model_name}'")

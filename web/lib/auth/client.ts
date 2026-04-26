@@ -24,7 +24,8 @@ export interface AuthUser {
   id: string;
   email: string;
   display_name: string | null;
-  role: "owner" | "admin" | "member";
+  role: "super_admin" | "owner" | "admin" | "member";
+  status: "active" | "pending" | "suspended";
   tenant: AuthTenant | null;
 }
 
@@ -122,4 +123,99 @@ export async function acceptInvite(
   }
   const data = await res.json() as { user: AuthUser };
   return data.user;
+}
+
+// ---------------------------------------------------------------------------
+// GET /setup/status — check if super admin has been created
+// ---------------------------------------------------------------------------
+
+export async function checkSetupStatus(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/setup/status`, { cache: "no-store" });
+    if (!res.ok) return false;
+    const data = await res.json() as { initialized: boolean };
+    return data.initialized;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /setup — create the super admin account
+// ---------------------------------------------------------------------------
+
+export interface SetupPayload {
+  email: string;
+  password: string;
+  display_name?: string;
+}
+
+export async function setupSuperAdmin(payload: SetupPayload): Promise<AuthUser> {
+  const res = await fetch(`${BASE}/setup`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as { detail?: string };
+    throw new Error(data.detail ?? "Setup failed");
+  }
+  const data = await res.json() as { user: AuthUser };
+  return data.user;
+}
+
+// ---------------------------------------------------------------------------
+// GET /admin/users/pending — list users awaiting approval
+// ---------------------------------------------------------------------------
+
+export interface PendingUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: string;
+  status: string;
+  created_at: string;
+  tenant: AuthTenant | null;
+}
+
+export async function listPendingUsers(): Promise<PendingUser[]> {
+  const res = await fetch(`${BASE}/admin/users/pending`, { credentials: "include", cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load pending users");
+  return res.json() as Promise<PendingUser[]>;
+}
+
+// ---------------------------------------------------------------------------
+// POST /admin/users/{id}/approve
+// ---------------------------------------------------------------------------
+
+export async function approveUser(userId: string, creditAmount?: number): Promise<void> {
+  const res = await fetch(`${BASE}/admin/users/${userId}/approve`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credit_amount: creditAmount ?? null }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as { detail?: string };
+    throw new Error(data.detail ?? "Approval failed");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET /admin/tenants — all tenants (super_admin workspace switcher)
+// ---------------------------------------------------------------------------
+
+export interface TenantSummary {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  created_at: string;
+}
+
+export async function listAllTenants(): Promise<TenantSummary[]> {
+  const res = await fetch(`${BASE}/admin/tenants`, { credentials: "include", cache: "no-store" });
+  if (!res.ok) return [];
+  return res.json() as Promise<TenantSummary[]>;
 }

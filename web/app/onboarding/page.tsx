@@ -1,201 +1,140 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useT } from "@/lib/i18n";
-import { ALL_PROVIDERS, type ProvidersState } from "./providers";
-import { StepWelcome }  from "./components/StepWelcome";
-import { StepAPIKeys }  from "./components/StepAPIKeys";
-import { StepDatabase } from "./components/StepDatabase";
-import { StepModel }    from "./components/StepModel";
-import { StepDone }     from "./components/StepDone";
+import { checkSetupStatus, setupSuperAdmin } from "@/lib/auth/client";
+import { useAuth } from "@/lib/auth/context";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface OnboardingData {
-  providers:    ProvidersState;
-  databaseUrl:  string;
-  dbConnected:  boolean;
-  defaultModel: string;
-}
-
-// ---------------------------------------------------------------------------
-// Save helper
-// ---------------------------------------------------------------------------
-
-async function saveSettings(data: OnboardingData): Promise<void> {
-  const calls: Promise<Response>[] = [];
-
-  // ── 1. Extract API keys ────────────────────────────────────────────────
-  const apiKeys: Record<string, string> = {};
-  for (const [id, cfg] of Object.entries(data.providers)) {
-    const def = ALL_PROVIDERS.find((p) => p.id === id);
-    if (def?.envKey && cfg.apiKey.trim()) {
-      apiKeys[def.envKey] = cfg.apiKey.trim();
-    }
-  }
-
-  if (Object.keys(apiKeys).length > 0) {
-    calls.push(
-      fetch("/api/proxy/settings/api_keys", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ value: apiKeys }),
-      }),
-    );
-  }
-
-  // ── 2. Database URL ────────────────────────────────────────────────────
-  if (data.databaseUrl) {
-    calls.push(
-      fetch("/api/proxy/settings/database_url", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ value: data.databaseUrl }),
-      }),
-    );
-  }
-
-  // ── 3. Model config (default model + per-provider base URLs & models) ──
-  const providerBaseUrls: Record<string, string> = {};
-  const providerModels:   Record<string, string> = {};
-
-  for (const [id, cfg] of Object.entries(data.providers)) {
-    const def = ALL_PROVIDERS.find((p) => p.id === id);
-    if (!def) continue;
-    // Only persist a custom base URL when it differs from the default
-    if (cfg.baseUrl.trim() && cfg.baseUrl.trim() !== def.defaultBaseUrl) {
-      providerBaseUrls[id] = cfg.baseUrl.trim();
-    }
-    if (cfg.model.trim()) {
-      providerModels[id] = cfg.model.trim();
-    }
-  }
-
-  calls.push(
-    fetch("/api/proxy/settings/model_config", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        value: {
-          default_model:       data.defaultModel,
-          provider_base_urls:  providerBaseUrls,
-          provider_models:     providerModels,
-        },
-      }),
-    }),
-  );
-
-  // ── 4. Mark onboarding complete ────────────────────────────────────────
-  calls.push(
-    fetch("/api/proxy/settings/onboarded", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ value: true }),
-    }),
-  );
-
-  const results = await Promise.all(calls);
-  const failed  = results.find((r) => !r.ok);
-  if (failed) throw new Error(`HTTP ${failed.status}`);
-}
-
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
-
-// steps: 0=Welcome  1=APIKeys  2=Database  3=Model  4=Done
-// progress bar covers steps 1-3 (shown when step > 0 && step < TOTAL_STEPS)
-const TOTAL_STEPS = 4;
+type Step = "check" | "form" | "done";
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const t      = useT();
+  const { refresh } = useAuth();
 
-  const [step, setStep] = useState(0);
-  const [data, setData] = useState<OnboardingData>({
-    providers:    {},
-    databaseUrl:  "",
-    dbConnected:  false,
-    defaultModel: "",
-  });
-  const [saving,    setSaving]    = useState(false);
-  const [saveError, setSaveError] = useState("");
+  const [step, setStep] = useState<Step>("check");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const next = () => setStep((s) => s + 1);
-  const back = () => setStep((s) => Math.max(0, s - 1));
+  // On mount: if already initialised, send to login
+  useEffect(() => {
+    checkSetupStatus().then((initialized) => {
+      if (initialized) {
+        router.replace("/login");
+      } else {
+        setStep("form");
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleComplete = async (model: string) => {
-    const finalData: OnboardingData = { ...data, defaultModel: model };
-    setSaving(true);
-    setSaveError("");
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
     try {
-      await saveSettings(finalData);
-      next(); // → StepDone
-    } catch (err) {
-      setSaveError(
-        err instanceof Error ? err.message : t.onboarding.model.errorHint,
-      );
+      await setupSuperAdmin({ email, password, display_name: displayName || undefined });
+      await refresh();
+      setStep("done");
+      setTimeout(() => router.replace("/admin"), 1500);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Setup failed");
     } finally {
-      setSaving(false);
+      setSubmitting(false);
     }
-  };
+  }
+
+  if (step === "check") {
+    return (
+      <div className="text-center text-slate-400 text-sm py-12">检测系统状态…</div>
+    );
+  }
+
+  if (step === "done") {
+    return (
+      <div className="text-center space-y-3 py-12">
+        <div className="text-4xl">✅</div>
+        <p className="text-white font-semibold text-lg">超级管理员创建成功</p>
+        <p className="text-slate-400 text-sm">正在跳转到管理控制台…</p>
+      </div>
+    );
+  }
 
   return (
-    <>
-      {/* Top progress bar (hidden on welcome / done) */}
-      {step > 0 && step < TOTAL_STEPS && (
-        <div className="fixed top-0 left-0 right-0 z-50 h-0.5 bg-slate-800">
-          <div
-            className="h-full bg-blue-500 transition-all duration-500 ease-out"
-            style={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="text-center space-y-2">
+        <div className="text-4xl mb-4">⚙️</div>
+        <h1 className="text-2xl font-bold text-white">系统初始化向导</h1>
+        <p className="text-slate-400 text-sm">
+          创建平台超级管理员账号，完成后即可开始管理租户和用户。
+        </p>
+      </div>
+
+      {/* Info banner */}
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-xs text-amber-300 space-y-1">
+        <p className="font-semibold">⚠ 请妥善保管此账号凭据</p>
+        <p>超级管理员拥有平台最高权限，此向导仅在系统首次启动时可用，之后永久锁定。</p>
+      </div>
+
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1">
+          <label className="block text-xs text-slate-400 font-medium">显示名称（可选）</label>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="Super Admin"
+            className="w-full bg-[#0d1526] border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
           />
         </div>
-      )}
 
-      {/* Step content */}
-      {step === 0 && (
-        <StepWelcome onNext={next} onSkip={() => router.push("/")} />
-      )}
+        <div className="space-y-1">
+          <label className="block text-xs text-slate-400 font-medium">邮箱地址 *</label>
+          <input
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="admin@example.com"
+            className="w-full bg-[#0d1526] border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+          />
+        </div>
 
-      {step === 1 && (
-        <StepAPIKeys
-          initial={data.providers}
-          onNext={(providers) => {
-            setData((d) => ({ ...d, providers }));
-            next();
-          }}
-          onBack={back}
-        />
-      )}
+        <div className="space-y-1">
+          <label className="block text-xs text-slate-400 font-medium">登录密码 *</label>
+          <input
+            type="password"
+            required
+            minLength={8}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="至少 8 位字符"
+            className="w-full bg-[#0d1526] border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+          />
+        </div>
 
-      {step === 2 && (
-        <StepDatabase
-          initial={data.databaseUrl}
-          onNext={(url, connected) => {
-            setData((d) => ({ ...d, databaseUrl: url, dbConnected: connected }));
-            next();
-          }}
-          onBack={back}
-        />
-      )}
+        {error && (
+          <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2 text-xs text-red-300">
+            {error}
+          </div>
+        )}
 
-      {step === 3 && (
-        <StepModel
-          providers={data.providers}
-          initial={data.defaultModel}
-          onComplete={handleComplete}
-          onBack={back}
-          saving={saving}
-          saveError={saveError}
-        />
-      )}
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm transition-colors"
+        >
+          {submitting ? "创建中…" : "创建超级管理员账号"}
+        </button>
+      </form>
 
-      {step === 4 && (
-        <StepDone dbConnected={data.dbConnected} onGo={() => router.push("/")} />
-      )}
-    </>
+      <p className="text-center text-xs text-slate-600">
+        AegisHarness · 系统初始化
+      </p>
+    </div>
   );
 }

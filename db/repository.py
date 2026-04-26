@@ -18,14 +18,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import (
+    BillingEventModel,
     CheckpointModel,
     EventModel,
     JobModel,
+    ModelPricingModel,
     RefreshTokenModel,
     SettingModel,
     SolutionModel,
@@ -468,3 +470,119 @@ async def load_jobs_by_tenant(
         }
         for row in rows
     ]
+
+
+# ===========================================================================
+# v1.3.0 — FinOps billing
+# ===========================================================================
+
+async def get_model_pricing(
+    session: AsyncSession,
+    model_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Return pricing row for model_id, or None if not configured."""
+    row = (await session.execute(
+        select(ModelPricingModel).where(
+            ModelPricingModel.model_id == model_id,
+            ModelPricingModel.is_active == True,  # noqa: E712
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        return None
+    return {
+        "model_id":            row.model_id,
+        "provider":            row.provider,
+        "input_price_per_1m":  float(row.input_price_per_1m),
+        "output_price_per_1m": float(row.output_price_per_1m),
+    }
+
+
+def compute_cost(
+    prompt_tokens: int,
+    completion_tokens: int,
+    pricing: Optional[Dict[str, Any]],
+) -> float:
+    """Calculate USD cost from token counts and a pricing row.
+
+    Returns 0.0 when pricing is None (unknown model — logged separately).
+    """
+    if pricing is None:
+        return 0.0
+    input_cost  = prompt_tokens     / 1_000_000 * pricing["input_price_per_1m"]
+    output_cost = completion_tokens / 1_000_000 * pricing["output_price_per_1m"]
+    return round(input_cost + output_cost, 8)
+
+
+async def append_billing_event(
+    session: AsyncSession,
+    tenant_id: str,
+    job_id: Optional[str],
+    model_id: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost_usd: float,
+) -> None:
+    """Insert one billing event row (append-only, no conflict handling)."""
+    session.add(BillingEventModel(
+        tenant_id=tenant_id,
+        job_id=job_id,
+        model_id=model_id,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cost_usd=cost_usd,
+        created_at=_now(),
+    ))
+
+
+async def deduct_tenant_credit(
+    session: AsyncSession,
+    tenant_id: str,
+    cost_usd: float,
+) -> None:
+    """Subtract cost_usd from tenant's credit_balance and add to total_cost_usd.
+
+    credit_balance is only decremented when it is not NULL (NULL = unlimited).
+    Uses a single UPDATE to avoid SELECT-then-UPDATE race conditions.
+    """
+    await session.execute(
+        update(TenantModel)
+        .where(TenantModel.id == tenant_id)
+        .values(
+            total_cost_usd=TenantModel.total_cost_usd + cost_usd,
+            credit_balance=text(
+                "CASE WHEN credit_balance IS NOT NULL "
+                f"THEN credit_balance - {cost_usd} "
+                "ELSE NULL END"
+            ),
+        )
+    )
+
+
+async def get_tenant_credit_balance(
+    session: AsyncSession,
+    tenant_id: str,
+) -> Optional[float]:
+    """Return the tenant's current credit_balance, or None for unlimited."""
+    row = (await session.execute(
+        select(TenantModel.credit_balance).where(TenantModel.id == tenant_id)
+    )).scalar_one_or_none()
+    return float(row) if row is not None else None
+
+
+async def get_billing_summary(
+    session: AsyncSession,
+) -> Dict[str, Any]:
+    """Return system-wide billing totals for the console dashboard."""
+    total_cost = (await session.execute(
+        select(func.sum(BillingEventModel.cost_usd))
+    )).scalar() or 0.0
+
+    tenant_cost_rows = (await session.execute(
+        select(BillingEventModel.tenant_id, func.sum(BillingEventModel.cost_usd))
+        .group_by(BillingEventModel.tenant_id)
+    )).all()
+
+    return {
+        "total_cost_usd":    round(float(total_cost), 6),
+        "per_tenant": {r[0]: round(float(r[1]), 6) for r in tenant_cost_rows if r[0]},
+    }

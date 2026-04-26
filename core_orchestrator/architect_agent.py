@@ -13,10 +13,21 @@ task executor -- each solve_task() call is independent.
 """
 
 import json
+import logging
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from .guardrails import ContentModerator, GuardRailViolation, PromptGuard
 from .llm_connector import ToolCall
+from .retry_utils import with_retry
+from .web_browser import (
+    SEARCH_WEB_TOOL,
+    READ_URL_TOOL,
+    WebBrowserError,
+    search_web,
+    read_url,
+)
 from .workspace_manager import WorkspaceManager
 
 
@@ -142,6 +153,7 @@ class ArchitectAgent:
         solutions_context: str = "",
         bus=None,
         hitl_manager=None,
+        enable_web_tools: bool = False,
     ):
         from .event_bus import NullBus
         self._tool_llm = tool_llm
@@ -151,6 +163,7 @@ class ArchitectAgent:
         self._solutions_context = solutions_context  # workspace lessons (SolutionStore)
         self._bus = bus or NullBus()
         self._hitl_manager = hitl_manager   # Optional HITLManager for sensitive-file gates
+        self._enable_web_tools = enable_web_tools
 
     # --- File tools (workspace-scoped) ---
 
@@ -234,6 +247,41 @@ class ArchitectAgent:
                 return json.dumps({"content": content})
             except Exception as e:
                 return json.dumps({"error": f"File not found: {filepath}"})
+
+        if tool_name == "search_web":
+            query       = arguments.get("query", "")
+            engine      = arguments.get("engine", "bing")
+            num_results = int(arguments.get("num_results", 5))
+            try:
+                result = with_retry(
+                    search_web, query,
+                    engine=engine, num_results=num_results,
+                    max_attempts=2, wait_min=1.0, wait_max=10.0,
+                )
+                self._bus.emit("architect.web_search", query=query, engine=engine)
+                return result  # already a JSON string from search_web()
+            except WebBrowserError as exc:
+                logger.warning("[ArchitectAgent] search_web failed: %s", exc)
+                return json.dumps({"error": str(exc), "retryable": exc.retryable})
+            except Exception as exc:
+                logger.error("[ArchitectAgent] search_web unexpected error: %s", exc)
+                return json.dumps({"error": f"Unexpected browser error: {exc}", "retryable": False})
+
+        if tool_name == "read_url":
+            url = arguments.get("url", "")
+            try:
+                text = with_retry(
+                    read_url, url,
+                    max_attempts=2, wait_min=1.0, wait_max=10.0,
+                )
+                self._bus.emit("architect.web_read", url=url)
+                return json.dumps({"content": text})
+            except WebBrowserError as exc:
+                logger.warning("[ArchitectAgent] read_url failed: %s", exc)
+                return json.dumps({"error": str(exc), "retryable": exc.retryable})
+            except Exception as exc:
+                logger.error("[ArchitectAgent] read_url unexpected error: %s", exc)
+                return json.dumps({"error": f"Unexpected browser error: {exc}", "retryable": False})
 
         # write_file and any other tool: acknowledge
         return json.dumps({"status": "ok"})
@@ -321,12 +369,17 @@ class ArchitectAgent:
             solutions_context=self._solutions_context or "",
         )
 
-        # Select tools: always write_file; add read_file when codebase exists
+        # Select tools: always write_file; add read_file when codebase exists;
+        # add search_web + read_url when web tools are enabled.
         tools = [WRITE_FILE_TOOL]
         tool_handler = None
         if has_existing_code:
             tools.append(READ_FILE_TOOL)
             tool_handler = self._tool_handler
+
+        if self._enable_web_tools:
+            tools.extend([SEARCH_WEB_TOOL, READ_URL_TOOL])
+            tool_handler = self._tool_handler  # ensure handler set even without existing code
 
         # Call LLM with tools -- returns List[ToolCall]
         tool_calls = self._tool_llm(

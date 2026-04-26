@@ -13,6 +13,7 @@ interface ConsoleStats {
   jobs: { total: number; running: number; completed: number; failed: number; pending: number };
   users: { total: number; active: number };
   tenants: { total: number; active: number; list: Tenant[] };
+  billing: { total_cost_usd: number };
   generated_at: string;
 }
 
@@ -22,6 +23,9 @@ interface Tenant {
   plan: string;
   created_at: string;
   job_count: number;
+  credit_balance: number | null;
+  total_cost_usd: number;
+  cost_usd: number;
 }
 
 interface TrendPoint {
@@ -165,6 +169,7 @@ export default function ConsolePage() {
           users={stats.users}
           tenantCount={stats.tenants.total}
           activeTenantCount={stats.tenants.active}
+          totalCostUsd={stats.billing?.total_cost_usd ?? 0}
         />
       ) : (
         <div className="grid grid-cols-5 gap-4">

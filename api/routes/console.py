@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
+
 from ..deps import CurrentUser, require_admin
 
 router = APIRouter(prefix="/console", tags=["console"])
@@ -32,8 +33,9 @@ async def _query_stats() -> dict[str, Any]:
     """Pull live stats from the DB. Falls back to zeros on any error."""
     try:
         from db.connection import get_session
-        from sqlalchemy import func, select, text
-        from db.models import JobModel, TenantModel, UserModel
+        from sqlalchemy import func, select
+        from db.models import BillingEventModel, JobModel, TenantModel, UserModel
+        from db.repository import get_billing_summary
 
         async with get_session() as session:
             # Total jobs
@@ -61,9 +63,12 @@ async def _query_stats() -> dict[str, Any]:
                 select(func.count()).select_from(UserModel).where(UserModel.is_active == True)  # noqa: E712
             )).scalar() or 0
 
-            # Tenants with job counts (top 10)
+            # Tenants with job counts (top 20)
             tenant_rows = (await session.execute(
-                select(TenantModel.id, TenantModel.name, TenantModel.plan, TenantModel.created_at)
+                select(
+                    TenantModel.id, TenantModel.name, TenantModel.plan,
+                    TenantModel.created_at, TenantModel.credit_balance, TenantModel.total_cost_usd,
+                )
                 .where(TenantModel.is_active == True)  # noqa: E712
                 .order_by(TenantModel.created_at.desc())
                 .limit(20)
@@ -75,6 +80,9 @@ async def _query_stats() -> dict[str, Any]:
             )).all()
             tenant_job_map: dict[str, int] = {r[0]: r[1] for r in tenant_job_rows if r[0]}
 
+            # Billing summary (total + per-tenant from billing_events)
+            billing = await get_billing_summary(session)
+
         tenants = [
             {
                 "id": r[0],
@@ -82,6 +90,9 @@ async def _query_stats() -> dict[str, Any]:
                 "plan": r[2],
                 "created_at": r[3],
                 "job_count": tenant_job_map.get(r[0], 0),
+                "credit_balance": float(r[4]) if r[4] is not None else None,
+                "total_cost_usd": float(r[5]) if r[5] is not None else 0.0,
+                "cost_usd": billing["per_tenant"].get(r[0], 0.0),
             }
             for r in tenant_rows
         ]
@@ -103,12 +114,16 @@ async def _query_stats() -> dict[str, Any]:
                 "total": total_users,
                 "active": active_users,
             },
+            "billing": {
+                "total_cost_usd": billing["total_cost_usd"],
+            },
         }
     except Exception:
         return {
             "jobs": {"total": 0, "running": 0, "completed": 0, "failed": 0, "pending": 0},
             "tenants": {"total": 0, "active": 0, "list": []},
             "users": {"total": 0, "active": 0},
+            "billing": {"total_cost_usd": 0.0},
         }
 
 

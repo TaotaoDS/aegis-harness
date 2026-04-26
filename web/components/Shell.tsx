@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { useAuth } from "@/lib/auth/context";
+import { checkSetupStatus } from "@/lib/auth/client";
 import { useT } from "@/lib/i18n";
 import type { ReactNode } from "react";
 
@@ -12,7 +13,6 @@ const PUBLIC_PATHS = ["/login", "/register"];
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.includes(pathname)) return true;
-  // /invite/* is also public
   if (pathname.startsWith("/invite/")) return true;
   return false;
 }
@@ -23,30 +23,68 @@ export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
-  // Route guard: redirect unauthenticated users to /login
+  // One-time check on mount: does the system have a super_admin?
+  const [setupChecked, setSetupChecked] = useState(false);
+  const [systemReady, setSystemReady] = useState(true);
+
   useEffect(() => {
+    checkSetupStatus().then((initialized) => {
+      setSystemReady(initialized);
+      setSetupChecked(true);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Guard 1: redirect to onboarding when super_admin not yet created
+  useEffect(() => {
+    if (!setupChecked) return;
+    if (!systemReady && !pathname.startsWith("/onboarding")) {
+      router.replace("/onboarding");
+    }
+  }, [setupChecked, systemReady, pathname, router]);
+
+  // Guard 2: redirect unauthenticated users to /login
+  useEffect(() => {
+    if (!setupChecked || !systemReady) return;
     if (loading) return;
     if (!user && !isPublicPath(pathname)) {
       router.replace("/login");
     }
-  }, [loading, user, pathname, router]);
+  }, [setupChecked, systemReady, loading, user, pathname, router]);
 
-  // Auth pages render full-screen (no sidebar)
+  // Guard 3: pending users can only see /pending
+  useEffect(() => {
+    if (!setupChecked || loading || !user) return;
+    if (user.status === "pending" && !pathname.startsWith("/pending") && !isPublicPath(pathname)) {
+      router.replace("/pending");
+    }
+  }, [setupChecked, loading, user, pathname, router]);
+
+  // Auth / public pages render full-screen (no sidebar)
   if (isPublicPath(pathname)) {
     return <>{children}</>;
   }
 
-  // Onboarding is a full-screen wizard — no sidebar
+  // Onboarding wizard (super-admin setup) — centered, no sidebar
   if (pathname?.startsWith("/onboarding")) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-8">
-        <div className="w-full max-w-2xl">{children}</div>
+      <div className="min-h-screen flex items-center justify-center p-8 bg-[#060d1a]">
+        <div className="w-full max-w-md">{children}</div>
       </div>
     );
   }
 
-  // Show a minimal loading veil while the auth check is in flight
-  if (loading) {
+  // Pending approval page — centered, no sidebar
+  if (pathname?.startsWith("/pending")) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-8 bg-[#060d1a]">
+        <div className="w-full max-w-lg">{children}</div>
+      </div>
+    );
+  }
+
+  // Loading veil while setup check or auth check is in flight
+  if (!setupChecked || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#060d1a]">
         <p className="text-sm text-slate-400">{t.auth.sessionLoading}</p>
@@ -56,6 +94,9 @@ export function Shell({ children }: { children: ReactNode }) {
 
   // Unauthenticated on a protected path — blank while redirect is pending
   if (!user) return null;
+
+  // Pending users waiting to be redirected — blank while redirect is pending
+  if (user.status === "pending") return null;
 
   return (
     <div className="flex min-h-screen">

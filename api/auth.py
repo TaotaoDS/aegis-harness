@@ -60,10 +60,11 @@ DEV_MODE: bool = not bool(SECRET_KEY)
 
 @dataclass(frozen=True)
 class TokenPayload:
-    sub:   UUID    # user id
-    tid:   UUID    # tenant id
-    role:  str     # "owner" | "admin" | "member"
-    email: str
+    sub:    UUID    # user id
+    tid:    UUID    # tenant id
+    role:   str     # "super_admin" | "owner" | "admin" | "member"
+    email:  str
+    status: str = "active"  # "active" | "pending" | "suspended"
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +97,7 @@ def create_access_token(
     tenant_id: UUID,
     role: str,
     email: str,
+    status: str = "active",
 ) -> str:
     """Encode and return a signed JWT access token."""
     if not _JOSE_AVAILABLE:
@@ -105,13 +107,14 @@ def create_access_token(
 
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
-        "sub":   str(user_id),
-        "tid":   str(tenant_id),
-        "role":  role,
-        "email": email,
-        "exp":   expire,
-        "iat":   datetime.now(timezone.utc),
-        "type":  "access",
+        "sub":    str(user_id),
+        "tid":    str(tenant_id),
+        "role":   role,
+        "email":  email,
+        "status": status,
+        "exp":    expire,
+        "iat":    datetime.now(timezone.utc),
+        "type":   "access",
     }
     return _jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -164,6 +167,7 @@ def decode_access_token(token: str) -> TokenPayload:
             tid=UUID(payload["tid"]),
             role=payload["role"],
             email=payload["email"],
+            status=payload.get("status", "active"),
         )
     except (KeyError, ValueError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Malformed token payload")

@@ -1,9 +1,12 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useT, useLocale } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth/context";
+import { listAllTenants } from "@/lib/auth/client";
+import type { TenantSummary } from "@/lib/auth/client";
 
 const STRIP_EMOJI = /^[\p{Emoji}☀-⛿]\s*/u;
 
@@ -11,12 +14,106 @@ function stripEmoji(s: string): string {
   return s.replace(STRIP_EMOJI, "");
 }
 
-/** Role badge colour */
 function roleBadgeClass(role: string): string {
-  if (role === "owner") return "text-amber-400 bg-amber-400/10";
-  if (role === "admin") return "text-blue-400 bg-blue-400/10";
+  if (role === "super_admin") return "text-purple-400 bg-purple-400/10";
+  if (role === "owner")       return "text-amber-400 bg-amber-400/10";
+  if (role === "admin")       return "text-blue-400 bg-blue-400/10";
   return "text-slate-400 bg-slate-700";
 }
+
+// ---------------------------------------------------------------------------
+// Workspace Switcher
+// ---------------------------------------------------------------------------
+
+function WorkspaceSwitcher({ user }: { user: { role: string; tenant: { id: string; name: string } | null } }) {
+  const [open, setOpen] = useState(false);
+  const [tenants, setTenants] = useState<TenantSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const loadTenants = useCallback(async () => {
+    if (user.role !== "super_admin") return;
+    setLoading(true);
+    try {
+      const list = await listAllTenants();
+      setTenants(list);
+    } finally {
+      setLoading(false);
+    }
+  }, [user.role]);
+
+  // Open dropdown
+  function handleToggle() {
+    if (!open && user.role === "super_admin") loadTenants();
+    setOpen((v) => !v);
+  }
+
+  // Close on outside click
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const currentName = user.tenant?.name ?? (user.role === "super_admin" ? "系统管理" : "—");
+
+  return (
+    <div ref={ref} className="relative px-3 pt-3 pb-1">
+      <button
+        onClick={handleToggle}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:bg-slate-700/60 transition-colors text-xs"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-slate-500 shrink-0">🏢</span>
+          <span className="text-slate-200 truncate">{currentName}</span>
+        </div>
+        <span className="text-slate-500 shrink-0">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="absolute left-3 right-3 top-full mt-1 bg-[#111c35] border border-slate-700 rounded-xl shadow-xl z-50 max-h-64 overflow-y-auto">
+          {user.role !== "super_admin" ? (
+            <div className="px-3 py-3 text-xs text-slate-500">仅超级管理员可切换租户</div>
+          ) : loading ? (
+            <div className="px-3 py-3 text-xs text-slate-500">加载中…</div>
+          ) : tenants.length === 0 ? (
+            <div className="px-3 py-3 text-xs text-slate-500">暂无租户</div>
+          ) : (
+            <>
+              <div className="px-3 py-2 border-b border-slate-700/50">
+                <p className="text-[10px] text-slate-500 uppercase tracking-wide">所有租户</p>
+              </div>
+              {tenants.map((t) => (
+                <div
+                  key={t.id}
+                  className={`px-3 py-2.5 flex items-center justify-between hover:bg-slate-700/40 cursor-pointer transition-colors ${
+                    t.id === user.tenant?.id ? "bg-blue-600/10" : ""
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs text-white truncate">{t.name}</p>
+                    <p className="text-[10px] text-slate-500">{t.plan} · {t.slug}</p>
+                  </div>
+                  {t.id === user.tenant?.id && (
+                    <span className="text-[10px] text-blue-400 shrink-0 ml-2">当前</span>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Sidebar
+// ---------------------------------------------------------------------------
 
 export function Sidebar() {
   const t = useT();
@@ -25,11 +122,13 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
 
-  const isAdminOrOwner = user?.role === "owner" || user?.role === "admin";
+  const isSuperAdmin   = user?.role === "super_admin";
+  const isAdminOrOwner = isSuperAdmin || user?.role === "owner" || user?.role === "admin";
 
   const links = [
     { href: "/",          label: stripEmoji(t.nav.dashboard), icon: "📊" },
-    ...(isAdminOrOwner ? [{ href: "/console", label: "控制台看板", icon: "📈" }] : []),
+    ...(isSuperAdmin   ? [{ href: "/admin",   label: "用户审批",    icon: "👤" }] : []),
+    ...(isAdminOrOwner ? [{ href: "/console", label: "控制台看板",  icon: "📈" }] : []),
     { href: "/chat",      label: stripEmoji(t.nav.chat),      icon: "💬" },
     { href: "/jobs/new",  label: stripEmoji(t.nav.newJob),    icon: "＋" },
     { href: "/settings",  label: stripEmoji(t.nav.settings),  icon: "⚙️" },
@@ -37,7 +136,7 @@ export function Sidebar() {
 
   function isActive(href: string): boolean {
     if (href === "/chat") return pathname === "/chat";
-    if (href === "/") return pathname === "/";
+    if (href === "/")     return pathname === "/";
     return pathname?.startsWith(href) ?? false;
   }
 
@@ -46,10 +145,10 @@ export function Sidebar() {
     router.replace("/login");
   }
 
-  /** Role label from translations */
   function roleLabel(role: string): string {
-    if (role === "owner") return t.auth.roleOwner;
-    if (role === "admin") return t.auth.roleAdmin;
+    if (role === "super_admin") return "超级管理员";
+    if (role === "owner")  return t.auth.roleOwner;
+    if (role === "admin")  return t.auth.roleAdmin;
     return t.auth.roleMember;
   }
 
@@ -61,8 +160,11 @@ export function Sidebar() {
         <span className="font-bold text-white text-base tracking-tight">AegisHarness</span>
       </div>
 
+      {/* Workspace switcher */}
+      {user && <WorkspaceSwitcher user={user} />}
+
       {/* Nav links */}
-      <nav className="flex-1 px-3 py-4 flex flex-col gap-1">
+      <nav className="flex-1 px-3 py-2 flex flex-col gap-1 overflow-y-auto">
         {links.map(({ href, label, icon }) => {
           const active = isActive(href);
           return (
@@ -87,16 +189,11 @@ export function Sidebar() {
         {/* User info */}
         {user && (
           <div className="px-1 pb-1">
-            <p
-              className="text-xs text-white truncate font-medium"
-              title={user.email}
-            >
+            <p className="text-xs text-white truncate font-medium" title={user.email}>
               {user.display_name || user.email}
             </p>
             <div className="flex items-center justify-between mt-1">
-              <span
-                className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${roleBadgeClass(user.role)}`}
-              >
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${roleBadgeClass(user.role)}`}>
                 {roleLabel(user.role)}
               </span>
               <button

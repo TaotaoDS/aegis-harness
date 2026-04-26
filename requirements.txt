@@ -69,3 +69,13 @@ prometheus-client>=0.20.0   # /metrics endpoint (harness_jobs_total, etc.)
 
 # Testing
 pytest>=8.0.0           # Test runner
+
+# =============================================================================
+# v1.3.0 — Native Web Browser Tools (M4)
+# =============================================================================
+
+# Headless browser automation for search_web / read_url tools
+playwright>=1.44.0
+
+# HTML content cleaning — strips scripts, ads, nav for read_url
+beautifulsoup4>=4.12.0

@@ -15,9 +15,14 @@ users            — user accounts (scoped to a tenant)
 refresh_tokens   — refresh-token store + invite tokens
 workspaces       — formalised workspace rows (slug matches legacy workspace_id)
 workspace_members — fine-grained workspace ACL (enforced in v0.2.0)
+
+Tables (v1.3.0 — FinOps billing)
+----------------------------------
+model_pricing    — per-model input/output token price rates (USD per 1M tokens)
+billing_events   — immutable per-LLM-call cost records (audit trail)
 """
 
-from sqlalchemy import Boolean, Column, Integer, String, Text, JSON, PrimaryKeyConstraint
+from sqlalchemy import Boolean, Column, Index, Integer, Numeric, String, Text, JSON, PrimaryKeyConstraint, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -119,6 +124,11 @@ class TenantModel(Base):
     token_usage_daily  = Column(Integer, nullable=False, default=0)
     token_budget_daily = Column(Integer, nullable=True)   # NULL = unlimited
     last_usage_reset   = Column(String(10), nullable=True)  # ISO date "YYYY-MM-DD"
+    # v1.3.0 — FinOps credit balance (added in migration 007)
+    # NULL = unlimited (default for existing tenants); 0.0 = exhausted → 402
+    credit_balance = Column(Numeric(12, 6), nullable=True)
+    # Running total of all-time API spend in USD (informational)
+    total_cost_usd = Column(Numeric(12, 6), nullable=False, default=0)
 
 
 class UserModel(Base):
@@ -129,7 +139,11 @@ class UserModel(Base):
     email           = Column(String(255), unique=True, nullable=False)
     display_name    = Column(String(255))
     hashed_password = Column(String(255), nullable=False)
+    # role: "super_admin" | "owner" | "admin" | "member"
     role            = Column(String(50),  nullable=False, default="member")
+    # status: "active" | "pending" | "suspended"
+    # New registrations start as "pending" until a super_admin approves them.
+    status          = Column(String(20),  nullable=False, default="active")
     is_active       = Column(Boolean,     nullable=False, default=True)
     created_at      = Column(String(50),  nullable=False)
     last_login_at   = Column(String(50))
@@ -175,3 +189,43 @@ class WorkspaceMemberModel(Base):
     user_id      = Column(String(36), primary_key=True)
     can_write    = Column(Boolean,    nullable=False, default=True)
     added_at     = Column(String(50), nullable=False)
+
+
+# ===========================================================================
+# v1.3.0 — FinOps billing models
+# ===========================================================================
+
+class ModelPricingModel(Base):
+    """Per-model token pricing rates in USD per 1 million tokens.
+
+    model_id matches the exact string returned by the provider in the
+    API response (e.g. 'gpt-4o-2024-08-06', 'claude-sonnet-4-20250514').
+    Seeded by migration 007; can be managed via admin API.
+    """
+    __tablename__ = "model_pricing"
+
+    model_id              = Column(String(128), primary_key=True)
+    provider              = Column(String(50),  nullable=False)
+    input_price_per_1m    = Column(Numeric(10, 6), nullable=False)   # USD / 1M prompt tokens
+    output_price_per_1m   = Column(Numeric(10, 6), nullable=False)   # USD / 1M completion tokens
+    is_active             = Column(Boolean,     nullable=False, default=True)
+    updated_at            = Column(String(50),  nullable=False)
+
+
+class BillingEventModel(Base):
+    """Immutable per-LLM-call cost record (append-only audit trail).
+
+    One row is written for every successful LLM API response that had
+    usage data. cost_usd is calculated at write-time from ModelPricingModel
+    (or 0 if no pricing row exists for that model_id).
+    """
+    __tablename__ = "billing_events"
+
+    id                = Column(Integer,     primary_key=True, autoincrement=True)
+    tenant_id         = Column(String(36),  nullable=False, index=True)
+    job_id            = Column(String(8),   nullable=True,  index=True)
+    model_id          = Column(String(128), nullable=False)
+    prompt_tokens     = Column(Integer,     nullable=False, default=0)
+    completion_tokens = Column(Integer,     nullable=False, default=0)
+    cost_usd          = Column(Numeric(12, 8), nullable=False, default=0)  # actual computed cost
+    created_at        = Column(String(50),  nullable=False)

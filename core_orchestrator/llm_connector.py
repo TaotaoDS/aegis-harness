@@ -94,6 +94,17 @@ class OpenAIConnector:
             temperature=temperature,
             messages=[{"role": "user", "content": text}],
         )
+        # Intercept usage from the actual HTTP response for FinOps billing.
+        try:
+            from .billing import record_usage
+            if resp.usage:
+                record_usage(
+                    model_id=resp.model or model_id,
+                    prompt_tokens=resp.usage.prompt_tokens or 0,
+                    completion_tokens=resp.usage.completion_tokens or 0,
+                )
+        except Exception:
+            pass
         return resp.choices[0].message.content
 
     def call_with_tools(
@@ -147,6 +158,17 @@ class OpenAIConnector:
                 tools=openai_tools,
                 tool_choice="auto",
             )
+            # Intercept usage from each round for FinOps billing.
+            try:
+                from .billing import record_usage
+                if resp.usage:
+                    record_usage(
+                        model_id=resp.model or model_id,
+                        prompt_tokens=resp.usage.prompt_tokens or 0,
+                        completion_tokens=resp.usage.completion_tokens or 0,
+                    )
+            except Exception:
+                pass
             choice = resp.choices[0]
             msg = choice.message
 
@@ -225,6 +247,17 @@ class AnthropicConnector:
             temperature=temperature,
             messages=[{"role": "user", "content": text}],
         )
+        # Intercept usage from the actual HTTP response for FinOps billing.
+        try:
+            from .billing import record_usage
+            if msg.usage:
+                record_usage(
+                    model_id=msg.model or model_id,
+                    prompt_tokens=msg.usage.input_tokens or 0,
+                    completion_tokens=msg.usage.output_tokens or 0,
+                )
+        except Exception:
+            pass
         return msg.content[0].text
 
     def call_with_tools(
@@ -271,6 +304,17 @@ class AnthropicConnector:
                 messages=messages,
                 tools=anthropic_tools,
             )
+            # Intercept usage from each round for FinOps billing.
+            try:
+                from .billing import record_usage
+                if msg.usage:
+                    record_usage(
+                        model_id=msg.model or model_id,
+                        prompt_tokens=msg.usage.input_tokens or 0,
+                        completion_tokens=msg.usage.output_tokens or 0,
+                    )
+            except Exception:
+                pass
 
             # Extract tool_use blocks
             tool_blocks = [b for b in msg.content if b.type == "tool_use"]

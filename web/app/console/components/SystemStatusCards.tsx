@@ -18,6 +18,7 @@ interface Props {
   users: UserStats;
   tenantCount: number;
   activeTenantCount: number;
+  totalCostUsd: number;
 }
 
 interface KpiCardProps {
@@ -37,13 +38,13 @@ function KpiCard({ label, value, sub, accent = "text-white" }: KpiCardProps) {
   );
 }
 
-export function SystemStatusCards({ jobs, users, tenantCount, activeTenantCount }: Props) {
+export function SystemStatusCards({ jobs, users, tenantCount, activeTenantCount, totalCostUsd }: Props) {
   const successRate = jobs.total > 0
     ? Math.round((jobs.completed / jobs.total) * 100)
     : 0;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
       <KpiCard
         label="总 Job 数"
         value={jobs.total}
@@ -71,6 +72,12 @@ export function SystemStatusCards({ jobs, users, tenantCount, activeTenantCount 
         value={users.active}
         sub={`共 ${users.total} 个`}
         accent="text-violet-400"
+      />
+      <KpiCard
+        label="实际成本"
+        value={`$${totalCostUsd.toFixed(4)}`}
+        sub="累计 USD"
+        accent="text-amber-400"
       />
     </div>
   );

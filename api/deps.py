@@ -61,16 +61,25 @@ _oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 class CurrentUser:
     user_id:   UUID
     tenant_id: UUID
-    role:      str      # "owner" | "admin" | "member"
+    role:      str      # "super_admin" | "owner" | "admin" | "member"
     email:     str
+    status:    str = "active"  # "active" | "pending" | "suspended"
+
+    @property
+    def is_super_admin(self) -> bool:
+        return self.role == "super_admin"
 
     @property
     def is_admin(self) -> bool:
-        return self.role in ("owner", "admin")
+        return self.role in ("super_admin", "owner", "admin")
 
     @property
     def is_owner(self) -> bool:
-        return self.role == "owner"
+        return self.role in ("super_admin", "owner")
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == "active"
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +89,9 @@ class CurrentUser:
 _DEV_USER = CurrentUser(
     user_id=BOOTSTRAP_USER_ID,
     tenant_id=BOOTSTRAP_TENANT_ID,
-    role="owner",
+    role="super_admin",
     email="dev@localhost",
+    status="active",
 )
 
 
@@ -126,6 +136,7 @@ async def get_current_user(
         tenant_id=payload.tid,
         role=payload.role,
         email=payload.email,
+        status=payload.status,
     )
 
 
@@ -145,7 +156,28 @@ async def require_admin(
 async def require_owner(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
-    """Raise 403 unless the user has owner role."""
+    """Raise 403 unless the user has owner or super_admin role."""
     if not current_user.is_owner:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Owner role required")
+    return current_user
+
+
+async def require_super_admin(
+    current_user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """Raise 403 unless the user has the super_admin role."""
+    if not current_user.is_super_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Super admin role required")
+    return current_user
+
+
+async def require_active(
+    current_user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """Raise 403 if the user's account is not yet approved (status != 'active')."""
+    if not current_user.is_active:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Account pending approval — please wait for an administrator to activate your account",
+        )
     return current_user

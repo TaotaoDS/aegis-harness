@@ -45,6 +45,8 @@ _RETRYABLE_CLASS_NAMES = frozenset({
     "Timeout",
     "ConnectionError",
     "ServiceUnavailableError",
+    "TimeoutError",    # Playwright navigation timeouts (also: stdlib asyncio.TimeoutError)
+    "PlaywrightError", # Playwright generic network/protocol errors
 })
 
 

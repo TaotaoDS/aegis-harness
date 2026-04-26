@@ -243,7 +243,7 @@ async def register(request: Request, body: RegisterRequest, response: Response):
             created_at = now,
         ))
 
-        # Create owner user
+        # Create owner user — starts as "pending" until approved by super_admin
         user_id = uuid4()
         session.add(UserModel(
             id              = str(user_id),
@@ -252,6 +252,7 @@ async def register(request: Request, body: RegisterRequest, response: Response):
             display_name    = body.display_name or body.email.split("@")[0],
             hashed_password = hash_password(body.password),
             role            = "owner",
+            status          = "pending",
             is_active       = True,
             created_at      = now,
         ))
@@ -267,7 +268,7 @@ async def register(request: Request, body: RegisterRequest, response: Response):
             created_at  = now,
         ))
 
-    access_token = create_access_token(user_id, tenant_id, "owner", body.email.lower())
+    access_token = create_access_token(user_id, tenant_id, "owner", body.email.lower(), status="pending")
     _set_tokens(response, access_token, raw_refresh)
 
     return {
@@ -278,6 +279,7 @@ async def register(request: Request, body: RegisterRequest, response: Response):
             "email":        body.email.lower(),
             "display_name": body.display_name or body.email.split("@")[0],
             "role":         "owner",
+            "status":       "pending",
             "tenant": {"id": str(tenant_id), "slug": slug, "name": body.tenant_name},
         },
     }
@@ -352,8 +354,9 @@ async def login(request: Request, body: LoginRequest, response: Response):
             .values(last_login_at=now)
         )
 
-    tenant_id = UUID(user.tenant_id)
-    access_token = create_access_token(user_uuid, tenant_id, user.role, user.email)
+    tenant_id    = UUID(user.tenant_id)
+    user_status  = getattr(user, "status", "active")
+    access_token = create_access_token(user_uuid, tenant_id, user.role, user.email, status=user_status)
     _set_tokens(response, access_token, raw_refresh)
 
     return {
@@ -364,6 +367,7 @@ async def login(request: Request, body: LoginRequest, response: Response):
             "email":        user.email,
             "display_name": user.display_name,
             "role":         user.role,
+            "status":       user_status,
             "tenant": {
                 "id":   tenant.id   if tenant else user.tenant_id,
                 "slug": tenant.slug if tenant else "",
@@ -479,6 +483,7 @@ async def me(current_user: CurrentUser = Depends(get_current_user)):
             "email":        current_user.email,
             "display_name": "Dev User",
             "role":         current_user.role,
+            "status":       current_user.status,
             "tenant": {
                 "id":   str(current_user.tenant_id),
                 "slug": "default",
@@ -512,6 +517,7 @@ async def me(current_user: CurrentUser = Depends(get_current_user)):
         "email":        user.email,
         "display_name": user.display_name,
         "role":         user.role,
+        "status":       getattr(user, "status", "active"),
         "tenant": {
             "id":   tenant_row.id   if tenant_row else user.tenant_id,
             "slug": tenant_row.slug if tenant_row else "",
@@ -628,7 +634,7 @@ async def accept_invite(token: str, body: AcceptInviteRequest, response: Respons
         if existing:
             raise HTTPException(status.HTTP_409_CONFLICT, detail="Email already registered")
 
-        # Create user
+        # Create user — invited users are immediately active (vouched by tenant admin)
         now     = datetime.now(timezone.utc).isoformat()
         user_id = uuid4()
         session.add(UserModel(
@@ -638,6 +644,7 @@ async def accept_invite(token: str, body: AcceptInviteRequest, response: Respons
             display_name    = body.display_name or email.split("@")[0],
             hashed_password = hash_password(body.password),
             role            = role,
+            status          = "active",
             is_active       = True,
             created_at      = now,
         ))

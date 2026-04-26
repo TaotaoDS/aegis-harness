@@ -24,7 +24,7 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from ..deps import CurrentUser, get_current_user
+from ..deps import CurrentUser, get_current_user, require_active
 from ..rate_limit import limiter
 from ..event_bridge import AsyncQueueBus
 from ..hitl_manager import HITLManager
@@ -140,7 +140,7 @@ async def get_jobs(current_user: CurrentUser = Depends(get_current_user)):
 async def create_and_start_job(
     request: Request,
     body: JobCreate,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_active),
 ):
     job = create_job(
         job_type=body.type,

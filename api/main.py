@@ -39,6 +39,8 @@ from .routes.interview import router as interview_router
 from .routes.settings import router as settings_router
 from .routes.mcp import router as mcp_router
 from .routes.console import router as console_router
+from .routes.setup import router as setup_router
+from .routes.admin import router as admin_router
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +173,8 @@ app.include_router(interview_router)
 app.include_router(settings_router)
 app.include_router(mcp_router)
 app.include_router(console_router)
+app.include_router(setup_router)
+app.include_router(admin_router)
 
 app.add_api_route("/metrics", metrics_endpoint, include_in_schema=False)
 

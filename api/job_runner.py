@@ -30,6 +30,7 @@ from .job_store import JobRecord, update_status
 
 _HARNESS_ROOT = Path(__file__).parent.parent
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="harness-job")
+_BOOTSTRAP_TENANT = "00000000-0000-0000-0000-000000000001"
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +117,75 @@ def _write_checkpoint(
     _db_mirror_checkpoint(loop, job_id, phase, completed_tasks, data)
 
 
+def _load_credit_balance(loop: asyncio.AbstractEventLoop, tenant_id: str) -> Optional[float]:
+    """Synchronously fetch tenant credit_balance from DB (called from thread)."""
+    result: list = []
+
+    async def _read() -> None:
+        try:
+            from db.connection import get_session, is_db_available
+            from db.repository import get_tenant_credit_balance
+            if not is_db_available():
+                return
+            async with get_session() as session:
+                balance = await get_tenant_credit_balance(session, tenant_id)
+                result.append(balance)
+        except Exception:
+            pass
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(_read(), loop)
+        future.result(timeout=5)
+    except Exception:
+        pass
+    return result[0] if result else None
+
+
+def _db_flush_billing(
+    loop: asyncio.AbstractEventLoop,
+    billing_ctx,
+) -> None:
+    """Persist billing records and deduct tenant credit. Fire-and-forget."""
+    if not billing_ctx or not billing_ctx.records:
+        return
+
+    async def _write() -> None:
+        try:
+            from db.connection import get_session, is_db_available
+            from db.repository import (
+                append_billing_event,
+                compute_cost,
+                deduct_tenant_credit,
+                get_model_pricing,
+            )
+            if not is_db_available():
+                return
+            total_cost = 0.0
+            async with get_session() as session:
+                for rec in billing_ctx.records:
+                    pricing = await get_model_pricing(session, rec.model_id)
+                    cost = compute_cost(rec.prompt_tokens, rec.completion_tokens, pricing)
+                    total_cost += cost
+                    await append_billing_event(
+                        session,
+                        tenant_id=billing_ctx.tenant_id,
+                        job_id=billing_ctx.job_id,
+                        model_id=rec.model_id,
+                        prompt_tokens=rec.prompt_tokens,
+                        completion_tokens=rec.completion_tokens,
+                        cost_usd=cost,
+                    )
+                if total_cost > 0:
+                    await deduct_tenant_credit(session, billing_ctx.tenant_id, total_cost)
+        except Exception:
+            pass
+
+    try:
+        asyncio.run_coroutine_threadsafe(_write(), loop)
+    except RuntimeError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -137,6 +207,7 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
         sys.path.insert(0, str(_HARNESS_ROOT))
 
     # ── Bootstrap ────────────────────────────────────────────────────────
+    billing_ctx = None
     try:
         from dotenv import load_dotenv
         load_dotenv(_HARNESS_ROOT / ".env")
@@ -145,6 +216,21 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
         from core_orchestrator.llm_gateway import LLMGateway
         from core_orchestrator.pii_sanitizer import default_pipeline
         from core_orchestrator.workspace_manager import WorkspaceManager
+        from core_orchestrator.billing import (
+            BillingContext,
+            InsufficientCreditError,
+            set_billing_context,
+        )
+
+        # ── FinOps: install billing context for this pipeline thread ─────
+        tenant_id = job.tenant_id or _BOOTSTRAP_TENANT
+        credit_balance = _load_credit_balance(loop, tenant_id)
+        billing_ctx = BillingContext(
+            tenant_id=tenant_id,
+            job_id=job.id,
+            credit_balance=credit_balance,
+        )
+        set_billing_context(billing_ctx)
 
         config_path = _HARNESS_ROOT / "models_config.yaml"
         router    = ModelRouter(config_path)
@@ -182,6 +268,17 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
         # ── Checkpoint: pipeline completed ───────────────────────────────
         _write_checkpoint(ws, ws_id, loop, job.id, "completed")
 
+    except InsufficientCreditError as e:  # type: ignore[possibly-unbound]
+        # Credit exhausted mid-run — treat as a payment-required rejection.
+        update_status(job.id, "rejected")
+        _db_mirror_status(loop, job.id, "rejected")
+        bus.emit("pipeline.rejected", reason=str(e))
+        try:
+            _write_checkpoint(ws, ws_id, loop, job.id, "rejected",  # type: ignore[possibly-unbound]
+                              extra={"reason": "insufficient_credit"})
+        except Exception:
+            pass
+
     except _RejectedError as e:
         update_status(job.id, "rejected")
         _db_mirror_status(loop, job.id, "rejected")
@@ -203,6 +300,14 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
             pass
 
     finally:
+        # ── FinOps: flush billing records to DB (non-blocking) ───────────
+        try:
+            from core_orchestrator.billing import set_billing_context
+            _db_flush_billing(loop, billing_ctx)
+            set_billing_context(None)
+        except Exception:
+            pass
+
         # ── Reflection (always runs — failures are most educational) ────
         try:
             _run_reflection(job, ws, ws_id, gateway, bus)   # type: ignore[possibly-unbound]

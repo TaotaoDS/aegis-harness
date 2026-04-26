@@ -22,9 +22,25 @@ from .model_router import ModelRouter, ConfigError
 from .workspace_manager import WorkspaceManager, WorkspaceError
 from .ceo_agent import CEOAgent, CEOStateError
 from .architect_agent import ArchitectAgent, WRITE_FILE_TOOL
+from .web_browser import (
+    SEARCH_WEB_TOOL,
+    READ_URL_TOOL,
+    WebBrowserError,
+    search_web,
+    read_url,
+)
 from .evaluator import Evaluator, EvalResult
 from .knowledge_manager import KnowledgeManager
 from .qa_agent import QAAgent, QAError
 from .resilience_manager import ResilienceManager
 from .ce_orchestrator import CEOrchestrator
 from .event_bus import EventBus, NullBus, ListBus, bus_from_workspace
+from .billing import (
+    BillingContext,
+    InsufficientCreditError,
+    LLMUsage,
+    get_billing_context,
+    set_billing_context,
+    record_usage,
+    check_credit,
+)
