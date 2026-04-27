@@ -3,9 +3,85 @@ import type { Translations } from "./zh";
 export const en: Translations = {
   nav: {
     dashboard: "Dashboard",
-    chat: "💬 Chat",
-    newJob: "New Task",
+    chat: "💬 Chat",          // deprecated
+    newJob: "New Task",       // deprecated
     settings: "⚙ Settings",
+    workspace:   "AI Workspace",
+    sysAdmin:    "System",
+    userApprove: "User Approval",
+    console:     "Console",
+  },
+
+  workspace: {
+    title:    "AI Workspace",
+    subtitle: "Upload knowledge · graph view · Q&A · /task to dispatch agents",
+    rightHeader: "AI Chat & Task Execution Grounded in Selected Graph Nodes",
+    contextHint: "Selected nodes injected as context",
+    contextNodesCount: (n: number) => `· ${n} nodes in scope`,
+    nodeContextSwitched: (title: string, neighbors: number) =>
+      `🔗 Context switched to "${title}" + ${neighbors} neighbours`,
+    autoMatched: (n: number, titles: string) =>
+      `🔍 Auto-matched ${n} related nodes: ${titles}`,
+    askingAbout: (title: string) => `💬 Grounded in "${title}"`,
+    chatModeIdle: "💬 Q&A mode (auto-match related nodes)",
+    taskModeHint: "⚡ /task [build|update] <requirement>",
+    inputPlaceholder: "Ask a question, or use /task to dispatch a job…",
+    enterShortcut: "Enter to send · Shift+Enter for newline",
+    taskBadge: "Task mode",
+    taskNeedsRequirement: "⚠️ Add a requirement after /task, e.g. /task build a blog API",
+    taskCreating: (kind: string) => `🚀 Creating ${kind} task…`,
+    taskCreateFailed: (err: string) => `⚠️ Failed to create task: ${err}`,
+    chatRequestFailed: (err: string) => `⚠️ Request failed: ${err}`,
+    greeting:
+      "Welcome to AI Workspace! 👋\n\n" +
+      "• Type a question → answered from the knowledge graph\n" +
+      "• Click a node on the left → inject precise context\n" +
+      "• Type `/task <req>` → let the agent team build for you\n" +
+      "• Type `/task update <req>` → iterate on an existing project",
+  },
+
+  knowledge: {
+    graphTitle:    "Knowledge Graph",
+    nodesAndEdges: (n: number, e: number) => `${n} nodes · ${e} edges`,
+    refresh:       "↻ Refresh",
+    refreshing:    "Loading…",
+    emptyGraph:    "Upload a file — the graph will render here",
+    selected:      "Selected: ",
+    contextInjected: (n: number) => `· ${n} neighbours injected as context`,
+    uploadHint:    "Drop a file or click to upload",
+    uploadFormats: "PDF / TXT",
+    uploading:     "Uploading",
+    uploadAnother: "+ Upload another file",
+    stages: {
+      queued:               "Queued",
+      parsing:              "Parsing",
+      extracting_content:   "Extracting",
+      extracting_concepts:  "Concepts",
+      building_graph:       "Graph",
+      completed:            "Done",
+    },
+  },
+
+  taskCard: {
+    phaseLabels: {
+      queued:    "Queued",
+      interview: "CEO Interview",
+      planning:  "Planning",
+      execution: "Coding",
+      qa:        "QA",
+      complete:  "Complete",
+      failed:    "Failed",
+      rejected:  "Rejected",
+    },
+    filesGenerated: (n: number) => `📄 ${n} files generated`,
+    cancel:         "Stop",
+    viewLive:       "Live details →",
+    viewReport:     "View report →",
+    cancelLog:      "🚫 Stopped streaming (task may still be running)",
+    interviewQuestion: (q: string) => `🎤 ${q}`,
+    completed:      "✅ All tasks complete",
+    failedWith:     (err: string) => `❌ ${err}`,
+    rejectedMsg:    "🚫 Task rejected",
   },
 
   dashboard: {

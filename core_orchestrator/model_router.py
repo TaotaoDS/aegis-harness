@@ -342,9 +342,12 @@ class ModelRouter:
     # -----------------------------------------------------------------------
 
     def is_key_available(self, model_name: str) -> bool:
-        """Return True iff the model's API key is set and non-empty."""
+        """Return True iff the model's API key is set, non-empty, and not a placeholder."""
         try:
-            self.get_api_key(model_name)
+            key = self.get_api_key(model_name)
+            # Reject obvious template placeholders (e.g. sk-xxxxx, nvapi-xxxxx)
+            if "xxxxx" in key or key.endswith("-placeholder"):
+                return False
             return True
         except ConfigError:
             return False

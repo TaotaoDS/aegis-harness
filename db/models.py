@@ -22,8 +22,17 @@ model_pricing    — per-model input/output token price rates (USD per 1M tokens
 billing_events   — immutable per-LLM-call cost records (audit trail)
 """
 
-from sqlalchemy import Boolean, Column, Index, Integer, Numeric, String, Text, JSON, PrimaryKeyConstraint, UniqueConstraint
+import enum
+
+from sqlalchemy import Boolean, Column, Float, Index, Integer, Numeric, String, Text, JSON, ForeignKeyConstraint, PrimaryKeyConstraint, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase
+
+try:
+    from pgvector.sqlalchemy import Vector as _Vector
+    _VECTOR_TYPE = _Vector(1536)
+except ImportError:  # pgvector not installed; fall back to JSON (no ANN index)
+    _Vector = None
+    _VECTOR_TYPE = JSON
 
 
 class Base(DeclarativeBase):
@@ -229,3 +238,60 @@ class BillingEventModel(Base):
     completion_tokens = Column(Integer,     nullable=False, default=0)
     cost_usd          = Column(Numeric(12, 8), nullable=False, default=0)  # actual computed cost
     created_at        = Column(String(50),  nullable=False)
+
+
+# ===========================================================================
+# v2.0.0 — Knowledge Graph (AI Second Brain)
+# ===========================================================================
+
+class NodeType(str, enum.Enum):
+    document = "document"   # uploaded file / web page
+    concept  = "concept"    # extracted key concept
+    tag      = "tag"        # classification label
+    entity   = "entity"     # named entity (person, org, place)
+    solution = "solution"   # linked from SolutionModel
+
+
+class NodeModel(Base):
+    """Knowledge graph node — fundamental unit of the second brain.
+
+    ``embedding`` uses pgvector's Vector(1536) when the extension is
+    available; falls back to JSON so the app starts without pgvector.
+    """
+    __tablename__ = "nodes"
+    __table_args__ = (
+        Index("ix_nodes_tenant_type", "tenant_id", "node_type"),
+        Index("ix_nodes_tenant_hash", "tenant_id", "content_hash"),
+    )
+
+    id           = Column(String(36),         primary_key=True)           # UUID
+    tenant_id    = Column(String(36),         nullable=False, index=True)
+    node_type    = Column(String(50),         nullable=False)              # NodeType values
+    title        = Column(String(500),        nullable=False, default="")  # graph display label
+    content      = Column(Text,               nullable=True)               # Markdown body for RAG
+    node_metadata = Column("metadata", JSON,  nullable=False, default=dict)
+    content_hash = Column(String(64),         nullable=True)               # SHA-256 for dedup
+    created_at   = Column(String(50),         nullable=False)
+    updated_at   = Column(String(50),         nullable=True)
+    embedding    = Column(_VECTOR_TYPE,       nullable=True)               # 1536-dim; NULL until embedded
+
+
+class EdgeModel(Base):
+    """Directed relationship between two knowledge graph nodes."""
+    __tablename__ = "edges"
+    __table_args__ = (
+        ForeignKeyConstraint(["source_node_id"], ["nodes.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["target_node_id"], ["nodes.id"], ondelete="CASCADE"),
+        Index("ix_edges_source", "source_node_id"),
+        Index("ix_edges_target", "target_node_id"),
+        Index("ix_edges_tenant", "tenant_id"),
+    )
+
+    id                = Column(Integer,        primary_key=True, autoincrement=True)
+    tenant_id         = Column(String(36),     nullable=False)
+    source_node_id    = Column(String(36),     nullable=False)
+    target_node_id    = Column(String(36),     nullable=False)
+    relationship_type = Column(String(100),    nullable=False)  # "references", "tagged_by", "related_to", …
+    weight            = Column(Numeric(5, 4),  nullable=False, default=1.0)
+    edge_metadata     = Column("metadata", JSON, nullable=True)
+    created_at        = Column(String(50),     nullable=False)

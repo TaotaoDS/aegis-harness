@@ -116,7 +116,9 @@ def _resolve_config() -> _EmbeddingConfig:
 
     # ── auto-detect ──────────────────────────────────────────────────────────
     if not provider:
-        provider = "openai" if os.environ.get("OPENAI_API_KEY") else "ollama"
+        _oai_key = os.environ.get("OPENAI_API_KEY", "")
+        _valid_oai = bool(_oai_key) and "xxxxx" not in _oai_key and not _oai_key.endswith("-placeholder")
+        provider = "openai" if _valid_oai else "ollama"
 
     # ── per-provider defaults ─────────────────────────────────────────────────
     if not model:

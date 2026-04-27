@@ -2,25 +2,57 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+ * Theme tokens — light by default, dark via `.dark` class on <html>.
+ * ------------------------------------------------------------------------- */
 :root {
-  --background: #0a0f1e;
-  --foreground: #e2e8f0;
+  --bg-app:      #fafaf7;   /* warm cream background */
+  --bg-panel:    #ffffff;
+  --bg-subtle:   #f4f3ee;
+  --fg-primary:  #1e293b;
+  --fg-muted:    #64748b;
+  --border:      #e8e6df;
+  --scroll-track: #efeee8;
+  --scroll-thumb: #cbc8bf;
+}
+
+.dark {
+  --bg-app:      #0a0f1e;
+  --bg-panel:    #0d1526;
+  --bg-subtle:   #111c35;
+  --fg-primary:  #e2e8f0;
+  --fg-muted:    #94a3b8;
+  --border:      #1e293b;
+  --scroll-track: #1a2035;
+  --scroll-thumb: #334155;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg-app);
+  color:      var(--fg-primary);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  transition: background-color .15s ease, color .15s ease;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #1a2035; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+/* Themed scrollbar */
+::-webkit-scrollbar          { width: 6px; height: 6px; }
+::-webkit-scrollbar-track    { background: var(--scroll-track); }
+::-webkit-scrollbar-thumb    { background: var(--scroll-thumb); border-radius: 3px; }
 
 /* SSE pulse animation for live indicator */
 @keyframes live-pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  50%      { opacity: 0.4; }
 }
 .live-dot { animation: live-pulse 1.5s ease-in-out infinite; }
+
+/* Resizer hover handle */
+.resizer-handle {
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color .12s ease;
+}
+.resizer-handle:hover,
+.resizer-handle.is-dragging {
+  background-color: rgba(139, 92, 246, 0.35);  /* violet-500/35 */
+}

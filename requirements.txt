@@ -18,6 +18,7 @@ tiktoken>=0.7.0         # Token counting for budget tracking
 # Web API server
 fastapi>=0.111.0        # REST + SSE API for the web management console
 uvicorn[standard]>=0.30.0  # ASGI server (uvloop + httptools)
+python-multipart>=0.0.9  # File upload support (UploadFile / Form) — required by /knowledge/upload
 
 # =============================================================================
 # v1.0.0 — Infrastructure & Persistence (M1)
@@ -27,7 +28,7 @@ uvicorn[standard]>=0.30.0  # ASGI server (uvloop + httptools)
 sqlalchemy[asyncio]>=2.0.30     # ORM + async session management
 asyncpg>=0.29.0                 # High-performance async PostgreSQL driver
 alembic>=1.13.0                 # Schema migrations (alembic upgrade head)
-# pgvector>=0.3.0               # pgvector Python client — uncomment in Week 4 (semantic search)
+pgvector>=0.3.0                 # pgvector Python client — Vector(1536) type for knowledge graph
 
 # =============================================================================
 # v1.1.0 — Resilience & Parallelism (M2)
@@ -40,10 +41,7 @@ tenacity>=8.2.0          # retry decorator (with_retry in retry_utils.py)
 # v1.2.0 — Chat UI, MCP Manager, pgvector Semantic Search (M3 + M1 final)
 # =============================================================================
 
-# Vector embeddings — pgvector Python client (requires pgvector PG extension)
-# pgvector>=0.3.0         # Uncomment when pgvector extension is available in DB
-# Note: embeddings are stored as JSONB arrays; cosine similarity computed in Python.
-# No hard dependency needed — VectorStore degrades gracefully without pgvector.
+# pgvector enabled above (v2.0.0 knowledge graph uses native Vector(1536) columns)
 
 # =============================================================================
 # v0.1.0 — Multi-tenancy & Auth (Task ④)
@@ -79,3 +77,10 @@ playwright>=1.44.0
 
 # HTML content cleaning — strips scripts, ads, nav for read_url
 beautifulsoup4>=4.12.0
+
+# =============================================================================
+# v2.0.0 — Knowledge Graph / AI Second Brain (Phase 2)
+# =============================================================================
+
+# PDF text extraction (pure-Python, no system libs required)
+pypdf>=4.0.0

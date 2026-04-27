@@ -68,7 +68,7 @@ export function Shell({ children }: { children: ReactNode }) {
   // Onboarding wizard (super-admin setup) — centered, no sidebar
   if (pathname?.startsWith("/onboarding")) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-8 bg-[#060d1a]">
+      <div className="min-h-screen flex items-center justify-center p-8 bg-stone-50 dark:bg-[#060d1a]">
         <div className="w-full max-w-md">{children}</div>
       </div>
     );
@@ -77,7 +77,7 @@ export function Shell({ children }: { children: ReactNode }) {
   // Pending approval page — centered, no sidebar
   if (pathname?.startsWith("/pending")) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-8 bg-[#060d1a]">
+      <div className="min-h-screen flex items-center justify-center p-8 bg-stone-50 dark:bg-[#060d1a]">
         <div className="w-full max-w-lg">{children}</div>
       </div>
     );
@@ -86,8 +86,8 @@ export function Shell({ children }: { children: ReactNode }) {
   // Loading veil while setup check or auth check is in flight
   if (!setupChecked || loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#060d1a]">
-        <p className="text-sm text-slate-400">{t.auth.sessionLoading}</p>
+      <div className="min-h-screen flex items-center justify-center bg-stone-50 dark:bg-[#060d1a]">
+        <p className="text-sm text-slate-500 dark:text-slate-400">{t.auth.sessionLoading}</p>
       </div>
     );
   }
@@ -98,13 +98,20 @@ export function Shell({ children }: { children: ReactNode }) {
   // Pending users waiting to be redirected — blank while redirect is pending
   if (user.status === "pending") return null;
 
+  // Full-bleed pages manage their own padding/height (no Shell wrapper padding)
+  const isFullBleed = pathname?.startsWith("/knowledge");
+
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen bg-[var(--bg-app)] text-[var(--fg-primary)]">
       <Sidebar />
-      <main className="flex-1 min-h-screen overflow-y-auto pl-52">
-        <div className="px-8 py-8 max-w-6xl">
-          {children}
-        </div>
+      <main className={`flex-1 pl-52 ${isFullBleed ? "overflow-hidden h-screen" : "min-h-screen overflow-y-auto"}`}>
+        {isFullBleed ? (
+          children
+        ) : (
+          <div className="px-8 py-8 max-w-6xl">
+            {children}
+          </div>
+        )}
       </main>
     </div>
   );

@@ -17,6 +17,12 @@ web/node_modules/
 web/out/
 web/.vercel/
 web/next-env.d.ts
+web/.env.local
+web/tsconfig.tsbuildinfo
+
+# Editor / OS / Claude side artefacts
+.VSCodeCounter/
+.claude/worktrees/
 
 # macOS
 .DS_Store

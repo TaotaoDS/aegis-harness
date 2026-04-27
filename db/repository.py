@@ -25,9 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .models import (
     BillingEventModel,
     CheckpointModel,
+    EdgeModel,
     EventModel,
     JobModel,
     ModelPricingModel,
+    NodeModel,
     RefreshTokenModel,
     SettingModel,
     SolutionModel,
@@ -586,3 +588,94 @@ async def get_billing_summary(
         "total_cost_usd":    round(float(total_cost), 6),
         "per_tenant": {r[0]: round(float(r[1]), 6) for r in tenant_cost_rows if r[0]},
     }
+
+
+# ===========================================================================
+# v2.0.0 — Knowledge Graph repository
+# ===========================================================================
+
+def _node_col_data(node_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate Python attribute names → DB column names for NodeModel.
+
+    ``node_metadata`` → ``metadata`` (``metadata`` is reserved in SQLAlchemy's
+    ORM layer; we use NodeModel.__table__ to bypass that, but the key must match
+    the actual column name in the table definition).
+    Similarly ``edge_metadata`` → ``metadata`` for EdgeModel.
+    """
+    out = {}
+    for k, v in node_data.items():
+        out["metadata" if k == "node_metadata" else k] = v
+    return out
+
+
+async def upsert_node(session: AsyncSession, node_data: Dict[str, Any]) -> None:
+    """Insert or update a knowledge graph node (keyed on ``id``).
+
+    Accepts either Python attribute names (``node_metadata``) or DB column
+    names (``metadata``) — both are normalised internally.
+    """
+    col_data = _node_col_data(node_data)
+    stmt = pg_insert(NodeModel.__table__).values(**col_data)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["id"],
+        set_={k: v for k, v in col_data.items() if k != "id"},
+    )
+    await session.execute(stmt)
+
+
+async def insert_edge(session: AsyncSession, edge_data: Dict[str, Any]) -> None:
+    """Append a directed edge between two nodes."""
+    col_data = {
+        "metadata" if k == "edge_metadata" else k: v
+        for k, v in edge_data.items()
+    }
+    stmt = pg_insert(EdgeModel.__table__).values(**col_data)
+    await session.execute(stmt)
+
+
+async def get_node_by_hash(
+    session: AsyncSession,
+    tenant_id: str,
+    content_hash: str,
+) -> Optional[NodeModel]:
+    """Return an existing node matching (tenant_id, content_hash), or None."""
+    result = await session.execute(
+        select(NodeModel).where(
+            NodeModel.tenant_id == tenant_id,
+            NodeModel.content_hash == content_hash,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_node_metadata(
+    session: AsyncSession,
+    node_id: str,
+    patch: dict,
+) -> None:
+    """Merge *patch* into a node's metadata and touch updated_at."""
+    import json as _json
+    from datetime import datetime, timezone
+    result = await session.execute(
+        text("SELECT metadata FROM nodes WHERE id = :nid"),
+        {"nid": node_id},
+    )
+    row = result.first()
+    current: dict = dict(row[0]) if row and row[0] else {}
+    current.update(patch)
+    await session.execute(
+        text("UPDATE nodes SET metadata = CAST(:meta AS json), updated_at = :now WHERE id = :nid"),
+        {"meta": _json.dumps(current), "now": datetime.now(timezone.utc).isoformat(), "nid": node_id},
+    )
+
+
+async def update_node_embedding(
+    session: AsyncSession,
+    node_id: str,
+    embedding: List[float],
+) -> None:
+    """Write a pgvector embedding into the nodes table."""
+    await session.execute(
+        text("UPDATE nodes SET embedding = CAST(:emb AS vector) WHERE id = :nid"),
+        {"emb": str(embedding), "nid": node_id},
+    )

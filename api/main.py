@@ -23,6 +23,14 @@ v1.1.0 changes (GuardrailsLayer)
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+# Load .env early so API keys are available before any module imports them
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env", override=False)
+except ImportError:
+    pass
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +49,7 @@ from .routes.mcp import router as mcp_router
 from .routes.console import router as console_router
 from .routes.setup import router as setup_router
 from .routes.admin import router as admin_router
+from .routes.knowledge import router as knowledge_router
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +184,7 @@ app.include_router(mcp_router)
 app.include_router(console_router)
 app.include_router(setup_router)
 app.include_router(admin_router)
+app.include_router(knowledge_router)
 
 app.add_api_route("/metrics", metrics_endpoint, include_in_schema=False)
 

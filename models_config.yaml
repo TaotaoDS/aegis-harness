@@ -48,13 +48,13 @@ models:
   #
   # 写法 A — 环境变量名间接引用 (原有方式，始终兼容):
   nvidia-glm:
-     provider: openai
-     model_id: z-ai/glm-5.1
-     api_key_env: NVIDIA_API_KEY
-     base_url_env: NVIDIA_BASE_URL        # https://integrate.api.nvidia.com/v1
-     max_tokens: 16384
-     temperature: 0.2
-     tier: standard
+    provider: openai
+    model_id: z-ai/glm-5.1
+    api_key_env: NVIDIA_API_KEY
+    base_url_env: NVIDIA_BASE_URL        # https://integrate.api.nvidia.com/v1
+    max_tokens: 16384
+    temperature: 0.2
+    tier: standard
   #
   # 写法 B — ${VAR} 内联插值 (新增，推荐用于第三方接口，更直观):
   # nvidia-llama:

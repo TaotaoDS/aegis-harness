@@ -4,9 +4,94 @@
 export const zh = {
   nav: {
     dashboard: "任务总览",
-    chat: "💬 对话",
-    newJob: "新建任务",
+    chat: "💬 对话",          // deprecated — kept for backward compat
+    newJob: "新建任务",       // deprecated — kept for backward compat
     settings: "⚙ 设置",
+    workspace: "智控空间",
+    sysAdmin:  "系统管理",
+    userApprove: "用户审批",
+    console:   "控制台看板",
+  },
+
+  // -------------------------------------------------------------------------
+  // 智控空间 (AI Workspace) — unified knowledge + task panel
+  // -------------------------------------------------------------------------
+  workspace: {
+    title:     "智控空间",
+    subtitle:  "上传知识 · 图谱可视化 · 问答 · /task 下达 Agent 任务",
+    rightHeader: "基于选中节点网络的 AI 对话与任务执行",
+    contextHint: "已注入选中节点作为上下文",
+    contextNodesCount: (n: number) => `· ${n} 个节点参与回答`,
+    nodeContextSwitched: (title: string, neighbors: number) =>
+      `🔗 上下文已切换为「${title}」及其 ${neighbors} 个关联节点`,
+    autoMatched: (n: number, titles: string) =>
+      `🔍 自动匹配到 ${n} 个相关节点：${titles}`,
+    askingAbout: (title: string) => `💬 基于「${title}」回答`,
+    chatModeIdle: "💬 知识问答模式（自动匹配相关节点）",
+    taskModeHint: "⚡ /task [build|update] <需求描述>",
+    inputPlaceholder: "输入问题，或使用 /task 下达指令…",
+    enterShortcut: "Enter 发送 · Shift+Enter 换行",
+    taskBadge: "任务模式",
+    taskNeedsRequirement: "⚠️ 请在 /task 后面补充需求描述，例如：/task 构建一个博客 API",
+    taskCreating: (kind: string) => `🚀 正在创建${kind}任务…`,
+    taskCreateFailed: (err: string) => `⚠️ 创建任务失败：${err}`,
+    chatRequestFailed: (err: string) => `⚠️ 请求失败：${err}`,
+    greeting:
+      "欢迎来到智控空间！👋\n\n" +
+      "• 直接提问 → 基于知识图谱回答\n" +
+      "• 点选左侧节点 → 注入精准上下文\n" +
+      "• 输入 `/task <需求>` → 让 Agent 团队执行开发任务\n" +
+      "• 输入 `/task update <需求>` → 在现有项目上迭代更新",
+  },
+
+  // -------------------------------------------------------------------------
+  // Knowledge graph + upload panel
+  // -------------------------------------------------------------------------
+  knowledge: {
+    graphTitle:   "知识图谱",
+    nodesAndEdges: (n: number, e: number) => `${n} 节点 · ${e} 关系`,
+    refresh:       "↻ 刷新",
+    refreshing:    "加载中…",
+    emptyGraph:    "上传文件后，知识图谱将在这里渲染",
+    selected:      "已选中: ",
+    contextInjected: (n: number) => `· ${n} 个关联节点已注入上下文`,
+    uploadHint:    "拖拽或点击上传",
+    uploadFormats: "PDF / TXT",
+    uploading:     "上传中",
+    uploadAnother: "+ 上传另一个文件",
+    stages: {
+      queued:               "已接收",
+      parsing:              "解析文件",
+      extracting_content:   "提取内容",
+      extracting_concepts:  "抽取概念",
+      building_graph:       "构建图谱",
+      completed:            "完成",
+    },
+  },
+
+  // -------------------------------------------------------------------------
+  // Task card (generative UI)
+  // -------------------------------------------------------------------------
+  taskCard: {
+    phaseLabels: {
+      queued:    "排队中",
+      interview: "CEO 访谈",
+      planning:  "架构规划",
+      execution: "代码生成",
+      qa:        "QA 审核",
+      complete:  "完成",
+      failed:    "失败",
+      rejected:  "已拒绝",
+    },
+    filesGenerated: (n: number) => `📄 ${n} 文件已生成`,
+    cancel:         "停止",
+    viewLive:       "实时详情 →",
+    viewReport:     "查看完整报告 →",
+    cancelLog:      "🚫 已停止监听（任务可能仍在后台运行）",
+    interviewQuestion: (q: string) => `🎤 ${q}`,
+    completed:      "✅ 所有任务已完成",
+    failedWith:     (err: string) => `❌ ${err}`,
+    rejectedMsg:    "🚫 任务被拒绝",
   },
 
   dashboard: {
