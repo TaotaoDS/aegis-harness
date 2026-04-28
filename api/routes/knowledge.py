@@ -489,6 +489,10 @@ async def web_search(
         raise HTTPException(504, detail="Web search timed out (60s)") from exc
     except Exception as exc:
         log.exception("[web_search] failed for query=%r", query)
+        # retryable=False means a structural/config error → 400 Bad Request
+        from core_orchestrator.web_browser import WebBrowserError
+        if isinstance(exc, WebBrowserError) and not exc.retryable:
+            raise HTTPException(400, detail=str(exc)) from exc
         raise HTTPException(502, detail=f"Web search failed: {type(exc).__name__}: {exc}") from exc
 
     hits = [
