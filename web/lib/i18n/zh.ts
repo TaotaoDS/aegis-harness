@@ -38,6 +38,7 @@ export const zh = {
     webSearchFailed: (err: string) => `🌐 联网搜索失败：${err}`,
     webSaveAsNode:  "+ 保存为节点",
     webSaving:      "保存中…",
+    webIngesting:   "⚙ 深度抓取中…",
     webSaved:       "✓ 已保存到图谱",
     webSaveFailed:  (err: string) => `保存失败：${err}`,
     webSearchNeedsKey:       "联网搜索需要 Brave Search API Key。请前往设置页面填写您的 Key（免费套餐 2000 次/月）。",
@@ -80,6 +81,7 @@ export const zh = {
     uploadAnother: "+ 上传另一个文件",
     stages: {
       queued:               "已接收",
+      crawling:             "深度抓取",
       parsing:              "解析文件",
       extracting_content:   "提取内容",
       extracting_concepts:  "抽取概念",

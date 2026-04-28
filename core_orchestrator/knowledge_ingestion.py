@@ -585,3 +585,188 @@ async def run_ingestion(
     except Exception as exc:
         logger.exception("[Ingestion] Pipeline failed — file=%s node_id=%s", filename, node_id)
         await _set_progress(node_id, tenant_id, "failed", -1, str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Web-URL ingestion pipeline (deep-crawl variant)
+# ---------------------------------------------------------------------------
+
+async def run_web_ingestion(
+    node_id: str,
+    tenant_id: str,
+    url: str,
+    title: str,
+    snippet: str = "",
+    query: str = "",
+) -> None:
+    """Full ingestion pipeline for a web URL — designed to run as a BackgroundTask.
+
+    The ``web`` node must already exist in the DB (created by the ``/web_save``
+    endpoint) so the frontend can poll ``ingest_status`` immediately.
+
+    Stages (tracked in node.metadata):
+      queued(0) → crawling(10) → extracting_concepts(55)
+      → building_graph(75) → embedding(90) → linking(95) → completed(100) | failed(-1)
+
+    Differences from ``run_ingestion`` (file-based)
+    -----------------------------------------------
+    * No "parse document" step — content comes from the web crawler.
+    * No "raw text → markdown" LLM step — markdownify already produces clean
+      Markdown; we proceed directly to concept extraction.
+    * Node type stays ``"web"`` (not ``"document"``).
+    * Original URL is preserved in node metadata.
+    * Falls back gracefully to snippet-only content when crawl fails.
+    """
+    from core_orchestrator.web_crawler import crawl_url
+
+    logger.info("[WebIngestion] Starting — url=%s node_id=%s", url, node_id)
+
+    try:
+        # ── 1. Crawl ──────────────────────────────────────────────────────────
+        await _set_progress(node_id, tenant_id, "crawling", 10)
+        try:
+            markdown = await asyncio.wait_for(
+                crawl_url(url, timeout=30.0),
+                timeout=50.0,           # hard cap: crawl + parse ≤ 50 s
+            )
+            logger.info("[WebIngestion] Crawl done — %d chars for %s", len(markdown), url)
+        except asyncio.TimeoutError:
+            logger.warning("[WebIngestion] Crawl timed out for %s — using snippet", url)
+            markdown = snippet
+        except Exception as exc:
+            logger.warning("[WebIngestion] Crawl failed for %s (%s) — using snippet", url, exc)
+            markdown = snippet
+
+        # Ensure we have *something* to work with
+        if not markdown.strip():
+            markdown = snippet or title
+        markdown = markdown[:_MAX_MD_CHARS]
+
+        # ── 2. LLM: Markdown → concept list ──────────────────────────────────
+        await _set_progress(node_id, tenant_id, "extracting_concepts", 55)
+        logger.info("[WebIngestion] Calling LLM to extract concepts")
+        try:
+            concepts = await asyncio.wait_for(
+                asyncio.to_thread(_llm_extract_concepts, markdown),
+                timeout=140.0,
+            )
+            logger.info("[WebIngestion] Concepts: %s", concepts)
+        except asyncio.TimeoutError:
+            logger.warning("[WebIngestion] Concept extraction timed out — no concepts")
+            concepts = []
+        except Exception as exc:
+            logger.warning("[WebIngestion] Concept extraction failed (%s) — no concepts", exc)
+            concepts = []
+
+        # ── 3. Persist graph ─────────────────────────────────────────────────
+        await _set_progress(node_id, tenant_id, "building_graph", 75)
+        all_node_ids = await _persist_web_graph(
+            doc_node_id=node_id,
+            tenant_id=tenant_id,
+            url=url,
+            title=title,
+            query=query,
+            markdown=markdown,
+            concepts=concepts,
+        )
+        logger.info("[WebIngestion] Graph persisted — %d nodes", len(all_node_ids))
+
+        # ── 4. Embed all nodes ────────────────────────────────────────────────
+        await _set_progress(node_id, tenant_id, "embedding", 90)
+        embed_texts = [markdown] + concepts
+        await _embed_nodes(all_node_ids, embed_texts)
+        logger.info("[WebIngestion] Embeddings written for %d nodes", len(all_node_ids))
+
+        # ── 5. Auto-link ──────────────────────────────────────────────────────
+        await _set_progress(node_id, tenant_id, "linking", 95)
+        try:
+            n_linked = await auto_link_by_similarity(all_node_ids, tenant_id)
+            logger.info("[WebIngestion] Auto-linked %d similarity edges", n_linked)
+        except Exception as exc:
+            logger.warning("[WebIngestion] Auto-link failed (non-fatal): %s", exc)
+
+        await _set_progress(node_id, tenant_id, "completed", 100)
+        logger.info("[WebIngestion] Completed — url=%s node_id=%s", url, node_id)
+
+    except Exception as exc:
+        logger.exception("[WebIngestion] Pipeline failed — url=%s node_id=%s", url, node_id)
+        await _set_progress(node_id, tenant_id, "failed", -1, str(exc))
+
+
+async def _persist_web_graph(
+    doc_node_id: str,
+    tenant_id: str,
+    url: str,
+    title: str,
+    query: str,
+    markdown: str,
+    concepts: List[str],
+) -> List[str]:
+    """Persist web node + concept nodes + edges, preserving URL metadata.
+
+    Mirrors ``_persist_graph`` but keeps ``node_type="web"`` and stores the
+    original URL in metadata so the frontend can deep-link back.
+    """
+    from db.connection import get_session
+    from db.repository import get_node_by_hash, insert_edge, upsert_node
+
+    now = _now()
+    doc_hash = _sha256(markdown)
+    concept_node_ids: List[str] = []
+
+    doc_node: Dict[str, Any] = {
+        "id": doc_node_id,
+        "tenant_id": tenant_id,
+        "node_type": "web",
+        "title": title[:500],
+        "content": markdown,
+        "metadata": {
+            "url": url,
+            "source": "web_search",
+            "query": query,
+            "ingest_status": "completed",
+            "progress": 100,
+        },
+        "content_hash": _sha256(f"{tenant_id}:web:{url}"),  # original dedup hash
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    concept_nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+
+    async with get_session() as session:
+        for concept in concepts:
+            c_hash = _sha256(f"{tenant_id}:concept:{concept}")
+            existing = await get_node_by_hash(session, tenant_id, c_hash)
+            if existing:
+                cid = existing.id
+            else:
+                cid = str(uuid.uuid4())
+                concept_nodes.append({
+                    "id": cid,
+                    "tenant_id": tenant_id,
+                    "node_type": "concept",
+                    "title": concept,
+                    "content": concept,
+                    "metadata": {"source_document_id": doc_node_id, "source_url": url},
+                    "content_hash": c_hash,
+                    "created_at": now,
+                })
+            concept_node_ids.append(cid)
+            edges.append({
+                "tenant_id": tenant_id,
+                "source_node_id": doc_node_id,
+                "target_node_id": cid,
+                "relationship_type": "contains_concept",
+                "weight": 1.0,
+                "created_at": now,
+            })
+
+        await upsert_node(session, doc_node)
+        for cn in concept_nodes:
+            await upsert_node(session, cn)
+        for e in edges:
+            await insert_edge(session, e)
+
+    return [doc_node_id] + concept_node_ids

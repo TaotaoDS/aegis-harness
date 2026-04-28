@@ -391,7 +391,9 @@ export function WorkspaceChat({
     setSaveStates((prev) => ({ ...prev, [hit.url]: "saving" }));
     try {
       await webSaveNode(hit, query);
-      setSaveStates((prev) => ({ ...prev, [hit.url]: "saved" }));
+      // Node is created immediately; deep-crawl ingestion runs in background.
+      // Show "ingesting" so the user knows the graph will update shortly.
+      setSaveStates((prev) => ({ ...prev, [hit.url]: "ingesting" }));
     } catch (err) {
       setSaveStates((prev) => ({ ...prev, [hit.url]: String(err) }));
     }
@@ -517,9 +519,10 @@ export function WorkspaceChat({
                 <div className="w-full max-w-[96%] space-y-2">
                   {wm.hits.map((hit, i) => {
                     const state = saveStates[hit.url];
-                    const isSaving = state === "saving";
-                    const isSaved  = state === "saved";
-                    const isError  = state && state !== "saving" && state !== "saved";
+                    const isSaving    = state === "saving";
+                    const isIngesting = state === "ingesting";
+                    const isSaved     = state === "saved" || isIngesting;
+                    const isError     = state && state !== "saving" && state !== "saved" && state !== "ingesting";
                     return (
                       <div
                         key={i}
@@ -543,15 +546,18 @@ export function WorkspaceChat({
                             disabled={isSaving || isSaved}
                             className={`shrink-0 text-[10px] px-2 py-0.5 rounded
                                         transition-colors border
-                                        ${isSaved
-                                          ? "text-emerald-600 border-emerald-300 dark:text-emerald-400 dark:border-emerald-700/50 cursor-default"
-                                          : isError
-                                            ? "text-red-500 border-red-300 dark:text-red-400 dark:border-red-700/50"
-                                            : "text-violet-600 hover:text-white hover:bg-violet-600 border-violet-300 dark:text-violet-400 dark:hover:text-white dark:hover:bg-violet-600 dark:border-violet-700/50"
+                                        ${isIngesting
+                                          ? "text-amber-600 border-amber-300 dark:text-amber-400 dark:border-amber-700/50 cursor-default"
+                                          : isSaved
+                                            ? "text-emerald-600 border-emerald-300 dark:text-emerald-400 dark:border-emerald-700/50 cursor-default"
+                                            : isError
+                                              ? "text-red-500 border-red-300 dark:text-red-400 dark:border-red-700/50"
+                                              : "text-violet-600 hover:text-white hover:bg-violet-600 border-violet-300 dark:text-violet-400 dark:hover:text-white dark:hover:bg-violet-600 dark:border-violet-700/50"
                                         } disabled:opacity-60`}
-                            title={isError ? String(state) : undefined}
+                            title={isError ? String(state) : isIngesting ? t.workspace.webIngesting : undefined}
                           >
                             {isSaving ? t.workspace.webSaving
+                              : isIngesting ? t.workspace.webIngesting
                               : isSaved ? t.workspace.webSaved
                               : isError ? t.workspace.webSaveFailed(String(state))
                               : t.workspace.webSaveAsNode}

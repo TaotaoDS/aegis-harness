@@ -544,22 +544,33 @@ async def web_search(
 async def web_save(
     request: Request,
     req: WebSaveRequest,
+    background_tasks: BackgroundTasks,
     current_user: CurrentUser = Depends(require_active),
 ):
-    """Convert one web search result into a `web` node in the knowledge graph.
+    """Convert one web search result into a fully-ingested knowledge graph node.
 
-    Stores ``title`` + ``snippet`` immediately (fast).  The original URL is
-    saved in ``node_metadata.url`` so the frontend can deep-link back.
+    Flow
+    ----
+    1. Create a stub ``web`` node immediately (returns 201 so the UI can show
+       the node straight away).
+    2. Launch a background task that:
+       - Crawls the full page with Playwright (falls back to urllib).
+       - Extracts 5-10 core concepts via LLM.
+       - Writes concept nodes + ``contains_concept`` edges.
+       - Embeds every node via the configured vector backend.
+       - Auto-links semantically similar nodes across the tenant graph.
+
+    The node's ``ingest_status`` field progresses through:
+    ``queued → crawling → extracting_concepts → building_graph
+    → embedding → linking → completed  (or failed)``
 
     Deduplicates by SHA-256(tenant_id + url) — calling this with the same URL
-    twice returns the existing node rather than creating a duplicate.
+    twice returns the existing node rather than spawning a duplicate ingestion.
     """
     from db.connection import get_session, is_db_available
-    from db.models import NodeModel
     from db.repository import upsert_node, get_node_by_hash
     from datetime import datetime, timezone
     import hashlib
-    import uuid
 
     if not is_db_available():
         raise HTTPException(503, detail="Database not available.")
@@ -576,24 +587,45 @@ async def web_save(
     async with get_session() as session:
         existing = await get_node_by_hash(session, tenant_id, content_hash)
         if existing:
-            return WebSaveResponse(node_id=existing.id, title=existing.title, url=url)
+            # If the node already exists but failed previously, allow re-ingestion
+            # by checking ingest_status in metadata.
+            meta = existing.node_metadata or {}
+            status = meta.get("ingest_status", "completed")
+            if status not in ("failed", "queued"):
+                return WebSaveResponse(node_id=existing.id, title=existing.title, url=url)
+            # Re-trigger ingestion for failed/stalled nodes
+            node_id = existing.id
+        else:
+            node_id = str(uuid.uuid4())
+            await upsert_node(session, {
+                "id": node_id,
+                "tenant_id": tenant_id,
+                "node_type": "web",
+                "title": title[:500],
+                "content": req.snippet or "",
+                "metadata": {
+                    "url": url,
+                    "source": "web_search",
+                    "query": req.query or "",
+                    "ingest_status": "queued",
+                    "progress": 0,
+                },
+                "content_hash": content_hash,
+                "created_at": now,
+                "updated_at": now,
+            })
 
-        node_id = str(uuid.uuid4())
-        await upsert_node(session, {
-            "id": node_id,
-            "tenant_id": tenant_id,
-            "node_type": "web",
-            "title": title[:500],
-            "content": req.snippet or "",
-            "metadata": {
-                "url": url,
-                "source": "web_search",
-                "query": req.query or "",
-            },
-            "content_hash": content_hash,
-            "created_at": now,
-            "updated_at": now,
-        })
+    # Launch deep-crawl ingestion in background
+    from core_orchestrator.knowledge_ingestion import run_web_ingestion
+    background_tasks.add_task(
+        run_web_ingestion,
+        node_id=node_id,
+        tenant_id=tenant_id,
+        url=url,
+        title=title,
+        snippet=req.snippet or "",
+        query=req.query or "",
+    )
 
     return WebSaveResponse(node_id=node_id, title=title, url=url)
 

@@ -34,6 +34,7 @@ export const en: Translations = {
     webSearchFailed: (err: string) => `🌐 Web search failed: ${err}`,
     webSaveAsNode:  "+ Save as node",
     webSaving:      "Saving…",
+    webIngesting:   "⚙ Crawling…",
     webSaved:       "✓ Saved to graph",
     webSaveFailed:  (err: string) => `Save failed: ${err}`,
     webSearchNeedsKey:       "Web search requires a Brave Search API key. Go to Settings → API Keys to add yours (free tier: 2000 req/month).",
@@ -73,6 +74,7 @@ export const en: Translations = {
     uploadAnother: "+ Upload another file",
     stages: {
       queued:               "Queued",
+      crawling:             "Crawling",
       parsing:              "Parsing",
       extracting_content:   "Extracting",
       extracting_concepts:  "Concepts",
