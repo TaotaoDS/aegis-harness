@@ -235,4 +235,12 @@ execution:
 #  model: text-embedding-3-small
 #  api_key_env: OPENAI_API_KEY   # 存放 API Key 的环境变量名
 #  # base_url: https://...       # OpenAI 兼容端点 (Azure/LM Studio 等)
+#
+# NVIDIA NIM 模式 (当前激活 — 免费额度 1000 次调用):
+# ---------------------------------------------------------------------------
+embedding:
+  provider: openai                              # NVIDIA NIM 使用 OpenAI 兼容协议
+  model: nvidia/nv-embedqa-e5-v5               # 1024 维，语义检索最优模型
+  base_url: https://integrate.api.nvidia.com/v1
+  api_key_env: NVIDIA_API_KEY                   # .env 中的 NVIDIA_API_KEY
 

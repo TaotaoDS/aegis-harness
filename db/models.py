@@ -29,7 +29,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 try:
     from pgvector.sqlalchemy import Vector as _Vector
-    _VECTOR_TYPE = _Vector(1536)
+    _VECTOR_TYPE = _Vector(1024)   # NVIDIA NIM nv-embedqa-e5-v5 → 1024 dims
 except ImportError:  # pgvector not installed; fall back to JSON (no ANN index)
     _Vector = None
     _VECTOR_TYPE = JSON

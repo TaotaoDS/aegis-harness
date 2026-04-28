@@ -147,6 +147,43 @@ export default function KnowledgePage() {
     }
   }, [loadGraph, t]);
 
+  // ── Semantic re-link ──────────────────────────────────────────────────────
+  const [relinking,  setRelinking]  = useState(false);
+  const [relinkMsg,  setRelinkMsg]  = useState("");
+
+  const handleRelink = useCallback(async () => {
+    setRelinking(true);
+    setRelinkMsg("");
+    try {
+      const res = await fetch("/api/proxy/knowledge/relink", { method: "POST" });
+      if (!res.ok) {
+        setRelinkMsg(t.knowledge.relinkFailed);
+        return;
+      }
+      // Poll graph every 2 s for up to 30 s to detect new edges
+      let prev = graph.links.length;
+      for (let i = 0; i < 15; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const data = await fetchGraph();
+          const newEdges = data.links.length - prev;
+          setGraph(data);
+          if (newEdges > 0) {
+            setRelinkMsg(t.knowledge.relinkDone(newEdges));
+            prev = data.links.length;
+            break;
+          }
+          if (i === 14) setRelinkMsg(t.knowledge.relinkDone(0));
+        } catch { /* non-fatal */ }
+      }
+    } catch {
+      setRelinkMsg(t.knowledge.relinkFailed);
+    } finally {
+      setRelinking(false);
+      setTimeout(() => setRelinkMsg(""), 5000);
+    }
+  }, [graph.links.length, t]);
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -185,6 +222,9 @@ export default function KnowledgePage() {
             onRefresh={loadGraph}
             loading={loading}
             onDeleteNode={handleDeleteNode}
+            onRelink={handleRelink}
+            relinking={relinking}
+            relinkMsg={relinkMsg}
           />
         </div>
       </div>

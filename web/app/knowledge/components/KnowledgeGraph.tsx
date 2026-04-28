@@ -47,6 +47,9 @@ interface Props {
   onRefresh: () => void;
   loading: boolean;
   onDeleteNode?: (nodeId: string) => void | Promise<void>;
+  onRelink?: () => void | Promise<void>;
+  relinking?: boolean;
+  relinkMsg?: string;
 }
 
 // Node colours — adding "web" for externally-saved web search results
@@ -69,6 +72,33 @@ const FALLBACK_COLOR = "#64748b";
 const LINK_COLOR_DARK  = "rgba(148,163,184,0.25)";
 const LINK_COLOR_LIGHT = "rgba(100,116,139,0.30)";
 const LINK_ACTIVE      = "rgba(139,92,246,0.75)";
+
+// Semantic similarity edges get warmer colors to distinguish them from
+// hard structural edges (contains_concept / web).
+const LINK_SEMANTIC_DARK  = "rgba(251,146,60,0.45)";   // orange — semantically_related
+const LINK_RELATED_DARK   = "rgba(167,243,208,0.45)";  // mint  — related_concept
+const LINK_SEMANTIC_LIGHT = "rgba(234,88,12,0.35)";
+const LINK_RELATED_LIGHT  = "rgba(16,185,129,0.40)";
+
+function linkColor(link: GraphLink, active: boolean, isDark: boolean): string {
+  if (active) return LINK_ACTIVE;
+  if (link.relationship_type === "semantically_related") {
+    return isDark ? LINK_SEMANTIC_DARK : LINK_SEMANTIC_LIGHT;
+  }
+  if (link.relationship_type === "related_concept") {
+    return isDark ? LINK_RELATED_DARK : LINK_RELATED_LIGHT;
+  }
+  return isDark ? LINK_COLOR_DARK : LINK_COLOR_LIGHT;
+}
+
+function linkWidth(link: GraphLink, active: boolean): number {
+  if (active) return 2.5;
+  // Similarity edges: width proportional to weight (0.72–1.0 → 1.0–2.2px)
+  if (link.relationship_type === "semantically_related" || link.relationship_type === "related_concept") {
+    return 0.8 + (link.weight ?? 0.75) * 1.8;
+  }
+  return 1.0;
+}
 
 function nodeColor(node: GraphNode, selected: boolean, highlighted: boolean, isDark: boolean): string {
   if (selected)    return isDark ? "#ffffff" : "#0f172a";
@@ -94,6 +124,9 @@ export function KnowledgeGraph({
   onRefresh,
   loading,
   onDeleteNode,
+  onRelink,
+  relinking,
+  relinkMsg,
 }: Props) {
   const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -165,23 +198,24 @@ export function KnowledgeGraph({
     [selectedNodeId, highlightedIds, isDark]
   );
 
-  const linkColor = useCallback(
+  const linkColorCb = useCallback(
     (link: object) => {
       const l = link as GraphLink;
       const src = typeof l.source === "string" ? l.source : l.source.id;
       const tgt = typeof l.target === "string" ? l.target : l.target.id;
-      if (src === selectedNodeId || tgt === selectedNodeId) return LINK_ACTIVE;
-      return isDark ? LINK_COLOR_DARK : LINK_COLOR_LIGHT;
+      const active = src === selectedNodeId || tgt === selectedNodeId;
+      return linkColor(l, active, isDark);
     },
     [selectedNodeId, isDark]
   );
 
-  const linkWidth = useCallback(
+  const linkWidthCb = useCallback(
     (link: object) => {
       const l = link as GraphLink;
       const src = typeof l.source === "string" ? l.source : l.source.id;
       const tgt = typeof l.target === "string" ? l.target : l.target.id;
-      return src === selectedNodeId || tgt === selectedNodeId ? 2 : 0.8;
+      const active = src === selectedNodeId || tgt === selectedNodeId;
+      return linkWidth(l, active);
     },
     [selectedNodeId]
   );
@@ -190,26 +224,45 @@ export function KnowledgeGraph({
     <div className="flex flex-col h-full">
       {/* Graph toolbar */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-stone-200 dark:border-slate-800 shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">{t.knowledge.graphTitle}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 shrink-0">{t.knowledge.graphTitle}</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700
-                           border border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-700/40">
+                           border border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-700/40 shrink-0">
             {t.knowledge.nodesAndEdges(nodes.length, links.length)}
           </span>
+          {relinkMsg && (
+            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 truncate">{relinkMsg}</span>
+          )}
         </div>
-        <button
-          onClick={onRefresh}
-          disabled={loading}
-          className="text-xs px-2 py-1 rounded
-                     text-slate-500 hover:text-slate-900 hover:bg-stone-100
-                     dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800
-                     transition-colors disabled:opacity-40"
-        >
-          {loading ? t.knowledge.refreshing : t.knowledge.refresh}
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {onRelink && (
+            <button
+              onClick={onRelink}
+              disabled={relinking || loading}
+              title="Analyze semantic similarity across all nodes and create related edges"
+              className="text-xs px-2 py-1 rounded
+                         text-amber-600 hover:text-white hover:bg-amber-600
+                         dark:text-amber-400 dark:hover:text-white dark:hover:bg-amber-600
+                         border border-amber-400/50 dark:border-amber-600/50
+                         transition-colors disabled:opacity-40"
+            >
+              {relinking ? t.knowledge.relinking : t.knowledge.relink}
+            </button>
+          )}
+          <button
+            onClick={onRefresh}
+            disabled={loading}
+            className="text-xs px-2 py-1 rounded
+                       text-slate-500 hover:text-slate-900 hover:bg-stone-100
+                       dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800
+                       transition-colors disabled:opacity-40"
+          >
+            {loading ? t.knowledge.refreshing : t.knowledge.refresh}
+          </button>
+        </div>
       </div>
 
-      {/* Legend */}
+      {/* Legend — include semantic edge types */}
       <div className="flex flex-wrap gap-x-3 gap-y-0.5 px-3 py-1.5 border-b border-stone-200 dark:border-slate-800 shrink-0">
         {Object.entries(NODE_COLORS).map(([type, color]) => (
           <span key={type} className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-500">
@@ -217,6 +270,14 @@ export function KnowledgeGraph({
             {type}
           </span>
         ))}
+        <span className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-slate-500 border-l border-slate-300 dark:border-slate-700 pl-2 ml-1">
+          <span className="w-4 h-0.5 inline-block rounded" style={{ backgroundColor: "rgba(251,146,60,0.8)" }} />
+          similar
+        </span>
+        <span className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-slate-500">
+          <span className="w-4 h-0.5 inline-block rounded" style={{ backgroundColor: "rgba(16,185,129,0.8)" }} />
+          concept↔
+        </span>
       </div>
 
       {/* Canvas area */}
@@ -235,8 +296,8 @@ export function KnowledgeGraph({
             backgroundColor="transparent"
             nodeCanvasObject={paintNode}
             nodeCanvasObjectMode={() => "replace"}
-            linkColor={linkColor}
-            linkWidth={linkWidth}
+            linkColor={linkColorCb}
+            linkWidth={linkWidthCb}
             onNodeClick={handleClick}
             nodeLabel={(n) => (n as GraphNode).title}
             linkLabel={(l) => (l as GraphLink).relationship_type}

@@ -596,3 +596,55 @@ async def web_save(
         })
 
     return WebSaveResponse(node_id=node_id, title=title, url=url)
+
+
+# ---------------------------------------------------------------------------
+# Semantic re-link (on-demand similarity edge rebuild)
+# ---------------------------------------------------------------------------
+
+@router.post("/relink", status_code=202)
+@limiter.limit("5/minute")
+async def relink_graph(
+    request: Request,
+    current_user: CurrentUser = Depends(require_active),
+):
+    """Re-run semantic similarity auto-linking for every embedded node in this tenant.
+
+    When to use
+    -----------
+    • After uploading several documents at once — the first document was linked
+      against an empty graph; this retroactively cross-links all of them.
+    • After nodes gain embeddings from a previously-failed embedding step.
+    • Any time the graph looks too sparsely connected.
+
+    How it works
+    ------------
+    For each node that has an embedding vector, the server queries pgvector's
+    cosine-distance index and creates ``semantically_related`` or
+    ``related_concept`` edges for every pair whose similarity exceeds the
+    configured threshold (0.72–0.82 depending on node types).
+    Existing edges are never duplicated.  Edge ``weight`` = cosine similarity.
+
+    The job runs in the background — this endpoint returns 202 immediately.
+    Poll ``GET /knowledge/nodes`` to see the updated graph once linking finishes.
+    """
+    tenant_id = str(current_user.tenant_id)
+
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
+    async def _background_relink() -> None:
+        try:
+            from core_orchestrator.knowledge_ingestion import relink_all_tenant_nodes
+            n = await relink_all_tenant_nodes(tenant_id)
+            _log.info("[relink] tenant=%s created %d new edges", tenant_id[:8], n)
+        except Exception:
+            _log.exception("[relink] failed for tenant=%s", tenant_id[:8])
+
+    # Use asyncio.create_task so the coroutine runs concurrently without blocking
+    asyncio.create_task(_background_relink())
+
+    return {
+        "status":  "accepted",
+        "message": "Semantic re-linking started. Refresh the graph in a few seconds.",
+    }

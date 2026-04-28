@@ -60,6 +60,16 @@ Example: ["machine learning", "neural networks", "gradient descent"]
 _MAX_RAW_CHARS = 15_000   # fed to markdown prompt
 _MAX_MD_CHARS  = 10_000   # fed to concept prompt
 
+# ---------------------------------------------------------------------------
+# Semantic auto-link thresholds
+# ---------------------------------------------------------------------------
+# Cosine similarity must exceed these values for an auto-link edge to be created.
+# Higher = stricter (fewer but more confident connections).
+_SIM_CONCEPT_CONCEPT = 0.82   # concept ↔ concept  (e.g. "NLP" ↔ "natural language processing")
+_SIM_DOC_DOC         = 0.72   # document ↔ document (broad topical similarity)
+_SIM_CROSS           = 0.75   # document ↔ concept  (doc is about this concept from another doc)
+_MAX_NEIGHBORS       = 5      # max outgoing similarity edges per node (prevents hairball)
+
 
 # ---------------------------------------------------------------------------
 # File parsing
@@ -257,6 +267,204 @@ async def _embed_nodes(
 
 
 # ---------------------------------------------------------------------------
+# Semantic similarity auto-linker
+# ---------------------------------------------------------------------------
+
+def _cosine_sim(a: List[float], b: List[float]) -> float:
+    """Pure-Python cosine similarity (fallback when pgvector SQL is unavailable)."""
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    na  = math.sqrt(sum(x * x for x in a))
+    nb  = math.sqrt(sum(y * y for y in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+async def auto_link_by_similarity(
+    node_ids: List[str],
+    tenant_id: str,
+) -> int:
+    """Create cross-document similarity edges for the given nodes.
+
+    For each node in ``node_ids``:
+      1.  Fetches the node's embedding.
+      2.  Queries pgvector (or falls back to Python cosine) for the top-K
+          most similar nodes in the same tenant.
+      3.  For pairs whose similarity exceeds the per-type threshold, creates
+          a directed edge (skipping duplicates and self-loops).
+
+    Edge types created:
+      - ``related_concept``    — concept ↔ concept (threshold 0.82)
+      - ``semantically_related`` — doc ↔ doc or doc ↔ concept (0.72 / 0.75)
+
+    The ``weight`` column stores the cosine similarity score so the graph
+    renderer can vary edge thickness by connection strength.
+
+    Returns the number of new edges created.
+    """
+    from db.connection import get_session, is_db_available
+    from db.models import NodeModel as _NodeModel
+    from db.repository import (
+        edge_exists,
+        find_similar_nodes_pgvector,
+        get_all_tenant_embeddings,
+        insert_edge,
+    )
+    from sqlalchemy import select as sa_select
+
+    if not is_db_available():
+        return 0
+
+    created  = 0
+    now      = _now()
+
+    # ── 1. Fetch embeddings for nodes we need to link ─────────────────────────
+    async with get_session() as session:
+        source_rows = (await session.execute(
+            sa_select(
+                _NodeModel.id,
+                _NodeModel.node_type,
+                _NodeModel.embedding,
+            ).where(
+                _NodeModel.id.in_(node_ids),
+                _NodeModel.tenant_id == tenant_id,
+                _NodeModel.embedding.is_not(None),
+            )
+        )).all()
+
+    if not source_rows:
+        logger.info("[AutoLink] No embeddings found for %d node(s) — skipping", len(node_ids))
+        return 0
+
+    # ── 2. Optionally pre-load all tenant embeddings for Python fallback ──────
+    # We lazily load this only when pgvector returns empty (meaning the SQL cast
+    # failed — i.e. pgvector extension not active, embeddings stored as JSON).
+    _all_tenant_cache: Optional[List[tuple]] = None
+
+    async def _get_candidates(session, node_id: str, emb: List[float]) -> List[tuple]:
+        """Return (cand_id, cand_type, sim) list; uses pgvector first, Python fallback."""
+        nonlocal _all_tenant_cache
+
+        # Try pgvector ANN search
+        candidates = await find_similar_nodes_pgvector(
+            session, tenant_id, emb, exclude_id=node_id,
+            limit=_MAX_NEIGHBORS * 3,
+        )
+        if candidates:
+            return candidates
+
+        # Fallback: load all embeddings once and compute in Python
+        if _all_tenant_cache is None:
+            _all_tenant_cache = await get_all_tenant_embeddings(session, tenant_id)
+
+        scored = [
+            (cid, ctype, _cosine_sim(emb, cemb))
+            for cid, ctype, cemb in _all_tenant_cache
+            if cid != node_id
+        ]
+        scored.sort(key=lambda x: x[2], reverse=True)
+        return scored[: _MAX_NEIGHBORS * 3]
+
+    # ── 3. For each source node, find neighbours and create edges ─────────────
+    for src_row in source_rows:
+        src_id   = src_row.id
+        src_type = src_row.node_type
+        emb      = src_row.embedding
+
+        # Normalise embedding (pgvector might return a custom type)
+        if not isinstance(emb, list):
+            try:
+                emb = list(emb)
+            except Exception:
+                continue
+
+        edges_this_node = 0
+
+        async with get_session() as session:
+            candidates = await _get_candidates(session, src_id, emb)
+
+            for cand_id, cand_type, sim in candidates:
+                if edges_this_node >= _MAX_NEIGHBORS:
+                    break
+
+                # Determine threshold and relationship type
+                if src_type == "concept" and cand_type == "concept":
+                    threshold = _SIM_CONCEPT_CONCEPT
+                    rel_type  = "related_concept"
+                elif src_type == "document" and cand_type == "document":
+                    threshold = _SIM_DOC_DOC
+                    rel_type  = "semantically_related"
+                else:
+                    threshold = _SIM_CROSS
+                    rel_type  = "semantically_related"
+
+                if sim < threshold:
+                    continue  # below threshold — skip
+
+                # Skip if already connected in either direction
+                if await edge_exists(session, src_id, cand_id, rel_type):
+                    edges_this_node += 1  # count it as "handled"
+                    continue
+                if await edge_exists(session, cand_id, src_id, rel_type):
+                    edges_this_node += 1
+                    continue
+
+                await insert_edge(session, {
+                    "tenant_id":         tenant_id,
+                    "source_node_id":    src_id,
+                    "target_node_id":    cand_id,
+                    "relationship_type": rel_type,
+                    "weight":            round(sim, 4),
+                    "metadata": {
+                        "similarity":   round(sim, 4),
+                        "auto_linked":  True,
+                    },
+                    "created_at": now,
+                })
+                edges_this_node += 1
+                created += 1
+                logger.debug(
+                    "[AutoLink] %s(%s…) -[%s %.3f]-> %s(%s…)",
+                    src_type, src_id[:8], rel_type, sim, cand_type, cand_id[:8],
+                )
+
+    logger.info(
+        "[AutoLink] Created %d new similarity edges for %d source nodes",
+        created, len(source_rows),
+    )
+    return created
+
+
+async def relink_all_tenant_nodes(tenant_id: str) -> int:
+    """Re-run auto-linking for every embedded node in the tenant.
+
+    Useful after bulk uploads or to retroactively link existing content.
+    Returns the total number of new edges created.
+    """
+    from db.connection import get_session, is_db_available
+    from db.models import NodeModel as _NodeModel
+    from sqlalchemy import select as sa_select
+
+    if not is_db_available():
+        return 0
+
+    async with get_session() as session:
+        ids = (await session.execute(
+            sa_select(_NodeModel.id).where(
+                _NodeModel.tenant_id == tenant_id,
+                _NodeModel.embedding.is_not(None),
+            )
+        )).scalars().all()
+
+    if not ids:
+        return 0
+
+    logger.info("[AutoLink] relink_all: %d nodes for tenant %s", len(ids), tenant_id[:8])
+    return await auto_link_by_similarity(list(ids), tenant_id)
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -359,6 +567,17 @@ async def run_ingestion(
         embed_texts = [markdown] + concepts
         await _embed_nodes(all_node_ids, embed_texts)
         logger.info("[Ingestion] Embeddings written for %d nodes", len(all_node_ids))
+
+        # ── 6. Auto-link: find semantic neighbours across the graph ───────────
+        # Compare every newly-embedded node against all existing tenant nodes
+        # via pgvector cosine similarity and create weighted similarity edges.
+        # This step is non-fatal — a failure here does not mark the doc as failed.
+        await _set_progress(node_id, tenant_id, "linking", 95)
+        try:
+            n_linked = await auto_link_by_similarity(all_node_ids, tenant_id)
+            logger.info("[Ingestion] Auto-linked %d new similarity edges", n_linked)
+        except Exception as exc:
+            logger.warning("[Ingestion] Auto-link step failed (non-fatal): %s", exc)
 
         await _set_progress(node_id, tenant_id, "completed", 100)
         logger.info("[Ingestion] Completed — file=%s node_id=%s", filename, node_id)

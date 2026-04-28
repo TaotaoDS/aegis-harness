@@ -163,16 +163,21 @@ async def _embed_openai(
     model: str,
     api_key: str,
     base_url: Optional[str] = None,
+    input_type: Optional[str] = None,
 ) -> Optional[List[float]]:
     """Embed via the OpenAI (or OpenAI-compatible) Embeddings API.
 
     Parameters
     ----------
-    text:     The text to embed (pre-truncated).
-    model:    Model name, e.g. ``"text-embedding-3-small"``.
-    api_key:  API key string.
-    base_url: Optional base URL override for OpenAI-compatible endpoints
-              (e.g. ``"http://localhost:11434/v1"`` for Ollama OpenAI compat).
+    text:       The text to embed (pre-truncated).
+    model:      Model name, e.g. ``"text-embedding-3-small"``.
+    api_key:    API key string.
+    base_url:   Optional base URL override for OpenAI-compatible endpoints
+                (e.g. NVIDIA NIM ``"https://integrate.api.nvidia.com/v1"``).
+    input_type: Optional ``input_type`` value passed as an extra_body param.
+                Required by asymmetric NVIDIA NIM models such as
+                ``nvidia/nv-embedqa-e5-v5``.  Use ``"passage"`` for document
+                content and ``"query"`` for search queries.
     """
     try:
         from openai import AsyncOpenAI  # type: ignore[import]
@@ -180,7 +185,13 @@ async def _embed_openai(
         if base_url:
             kwargs["base_url"] = base_url
         client = AsyncOpenAI(**kwargs)
-        resp   = await client.embeddings.create(model=model, input=text)
+
+        create_kwargs: Dict[str, Any] = {"model": model, "input": text}
+        # NVIDIA NIM asymmetric models require input_type in the request body
+        if input_type:
+            create_kwargs["extra_body"] = {"input_type": input_type, "truncate": "END"}
+
+        resp = await client.embeddings.create(**create_kwargs)
         return resp.data[0].embedding
     except ImportError:
         logger.debug("[VectorStore] openai package not installed — cannot use OpenAI backend")
@@ -309,7 +320,12 @@ class VectorStore:
                 )
                 return None
             model = self._legacy_model or cfg.model
-            return await _embed_openai(truncated, model, api_key, cfg.base_url)
+            # NVIDIA NIM asymmetric models require input_type="passage" for
+            # document content.  Detect by base_url pointing to NVIDIA's endpoint.
+            input_type: Optional[str] = None
+            if cfg.base_url and "nvidia.com" in cfg.base_url:
+                input_type = "passage"
+            return await _embed_openai(truncated, model, api_key, cfg.base_url, input_type)
 
         if cfg.provider == "ollama":
             model    = self._legacy_model or cfg.model

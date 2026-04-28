@@ -648,6 +648,92 @@ async def get_node_by_hash(
     return result.scalar_one_or_none()
 
 
+async def edge_exists(
+    session: AsyncSession,
+    source_node_id: str,
+    target_node_id: str,
+    relationship_type: str,
+) -> bool:
+    """Return True if a directed edge of this type already exists."""
+    result = await session.execute(
+        select(EdgeModel.id).where(
+            EdgeModel.source_node_id == source_node_id,
+            EdgeModel.target_node_id == target_node_id,
+            EdgeModel.relationship_type == relationship_type,
+        ).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def find_similar_nodes_pgvector(
+    session: AsyncSession,
+    tenant_id: str,
+    embedding: List[float],
+    exclude_id: str,
+    limit: int = 10,
+) -> List[tuple]:
+    """Query pgvector for the K nearest neighbours using the IVFFlat index.
+
+    Returns a list of (node_id, node_type, cosine_similarity) tuples ordered
+    by descending similarity.  Uses the ``<=>`` cosine-distance operator which
+    is accelerated by the ``ix_nodes_embedding`` IVFFlat index created in
+    migration 009.
+
+    Falls back gracefully to an empty list when pgvector is not available
+    (the column is stored as JSON in that case, causing a cast error).
+    """
+    vec_literal = "[" + ",".join(f"{x:.8f}" for x in embedding) + "]"
+    sql = text("""
+        SELECT
+            id,
+            node_type,
+            (1.0 - (embedding <=> CAST(:vec AS vector)))::float AS similarity
+        FROM nodes
+        WHERE tenant_id  = :tid
+          AND embedding  IS NOT NULL
+          AND id         != :eid
+        ORDER BY embedding <=> CAST(:vec AS vector)
+        LIMIT :lim
+    """)
+    try:
+        result = await session.execute(
+            sql,
+            {"vec": vec_literal, "tid": tenant_id, "eid": exclude_id, "lim": limit},
+        )
+        return [(row.id, row.node_type, float(row.similarity)) for row in result]
+    except Exception:
+        # pgvector not available — caller should fall back to Python similarity
+        return []
+
+
+async def get_all_tenant_embeddings(
+    session: AsyncSession,
+    tenant_id: str,
+) -> List[tuple]:
+    """Return (id, node_type, embedding_list) for every node that has an embedding.
+
+    Used as a fallback when pgvector's ``<=>`` operator is unavailable.
+    """
+    rows = (await session.execute(
+        select(NodeModel.id, NodeModel.node_type, NodeModel.embedding).where(
+            NodeModel.tenant_id == tenant_id,
+            NodeModel.embedding.is_not(None),
+        )
+    )).all()
+    result = []
+    for row in rows:
+        emb = row.embedding
+        if emb is None:
+            continue
+        if not isinstance(emb, list):
+            try:
+                emb = list(emb)
+            except Exception:
+                continue
+        result.append((row.id, row.node_type, emb))
+    return result
+
+
 async def update_node_metadata(
     session: AsyncSession,
     node_id: str,
