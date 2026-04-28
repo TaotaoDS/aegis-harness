@@ -22,7 +22,7 @@ import { useT } from "@/lib/i18n";
 // Types
 // ---------------------------------------------------------------------------
 
-type Role = "user" | "assistant" | "system" | "task";
+type Role = "user" | "assistant" | "system" | "task" | "web_results";
 
 interface BaseMsg {
   id:      string;
@@ -36,7 +36,19 @@ interface TaskMsg extends BaseMsg {
   jobType: JobType;
 }
 
-type Message = BaseMsg | TaskMsg;
+export interface WebHit {
+  title:   string;
+  url:     string;
+  snippet: string | null;
+}
+
+interface WebResultsMsg extends BaseMsg {
+  role:    "web_results";
+  query:   string;
+  hits:    WebHit[];
+}
+
+type Message = BaseMsg | TaskMsg | WebResultsMsg;
 
 interface HistoryTurn { role: "user" | "assistant"; content: string }
 
@@ -48,6 +60,9 @@ let _seq = 0;
 const mkMsg = (role: Role, content: string): BaseMsg => ({ id: String(++_seq), role, content });
 const mkTask = (jobId: string, jobType: JobType, content: string): TaskMsg => ({
   id: String(++_seq), role: "task", jobId, jobType, content,
+});
+const mkWebResults = (query: string, hits: WebHit[]): WebResultsMsg => ({
+  id: String(++_seq), role: "web_results", content: "", query, hits,
 });
 
 // ---------------------------------------------------------------------------
@@ -94,6 +109,34 @@ async function searchNodes(query: string, limit = 5): Promise<SearchHit[]> {
   if (!res.ok) return [];
   const data = await res.json() as { hits?: SearchHit[] };
   return data.hits ?? [];
+}
+
+async function webSearch(query: string, limit = 5): Promise<WebHit[]> {
+  const res = await fetch("/api/proxy/knowledge/web_search", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ query, limit, engine: "duckduckgo" }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error((j as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  const data = await res.json() as { hits?: WebHit[] };
+  return data.hits ?? [];
+}
+
+async function webSaveNode(hit: WebHit, query: string): Promise<string> {
+  const res = await fetch("/api/proxy/knowledge/web_save", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ url: hit.url, title: hit.title, snippet: hit.snippet ?? "", query }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error((j as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  const data = await res.json() as { node_id: string };
+  return data.node_id;
 }
 
 async function createJob(requirement: string, type: JobType): Promise<string> {
@@ -152,10 +195,13 @@ export function WorkspaceChat({
   const [messages, setMessages] = useState<Message[]>([
     mkMsg("assistant", t.workspace.greeting),
   ]);
-  const [input,   setInput]   = useState("");
-  const [loading, setLoading] = useState(false);
-  const bottomRef             = useRef<HTMLDivElement>(null);
-  const textareaRef           = useRef<HTMLTextAreaElement>(null);
+  const [input,         setInput]         = useState("");
+  const [loading,       setLoading]       = useState(false);
+  const [webMode,       setWebMode]       = useState(false);
+  // Map from hit URL → save state: undefined | "saving" | "saved" | error string
+  const [saveStates,    setSaveStates]    = useState<Record<string, string>>({});
+  const bottomRef                          = useRef<HTMLDivElement>(null);
+  const textareaRef                        = useRef<HTMLTextAreaElement>(null);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -195,6 +241,34 @@ export function WorkspaceChat({
 
     // Always show the user's raw message
     setMessages((prev) => [...prev, mkMsg("user", raw)]);
+
+    // ── Web search mode ─────────────────────────────────────────────────────
+    if (webMode && parsed.mode !== "task") {
+      setLoading(true);
+      try {
+        const hits = await webSearch(raw, 5);
+        setMessages((prev) => [
+          ...prev,
+          hits.length > 0
+            ? mkWebResults(raw, hits)
+            : mkMsg("system", t.workspace.webSearchFailed("No results")),
+        ]);
+        if (hits.length > 0) {
+          setMessages((prev) => [
+            ...prev,
+            mkMsg("system", t.workspace.webSearchResults(hits.length, raw)),
+          ]);
+        }
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev,
+          mkMsg("system", t.workspace.webSearchFailed(String(err))),
+        ]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     // ── /task mode ──────────────────────────────────────────────────────────
     if (parsed.mode === "task") {
@@ -265,7 +339,7 @@ export function WorkspaceChat({
     } finally {
       setLoading(false);
     }
-  }, [input, loading, contextNodeIds, contextTitles, buildHistory, onAutoContext]);
+  }, [input, loading, webMode, contextNodeIds, contextTitles, buildHistory, onAutoContext, t]);
 
   // ── Input event handlers ─────────────────────────────────────────────────
 
@@ -288,6 +362,16 @@ export function WorkspaceChat({
   const hasContext   = contextNodeIds.length > 0;
   const isTaskMode   = input.trimStart().startsWith("/task");
   const canSend      = !loading && input.trim().length > 0;
+
+  const handleSaveHit = useCallback(async (hit: WebHit, query: string) => {
+    setSaveStates((prev) => ({ ...prev, [hit.url]: "saving" }));
+    try {
+      await webSaveNode(hit, query);
+      setSaveStates((prev) => ({ ...prev, [hit.url]: "saved" }));
+    } catch (err) {
+      setSaveStates((prev) => ({ ...prev, [hit.url]: String(err) }));
+    }
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -373,6 +457,70 @@ export function WorkspaceChat({
             );
           }
 
+          // Web search results card list
+          if (msg.role === "web_results") {
+            const wm = msg as WebResultsMsg;
+            return (
+              <div key={msg.id} className="flex justify-start w-full">
+                <div className="w-full max-w-[96%] space-y-2">
+                  {wm.hits.map((hit, i) => {
+                    const state = saveStates[hit.url];
+                    const isSaving = state === "saving";
+                    const isSaved  = state === "saved";
+                    const isError  = state && state !== "saving" && state !== "saved";
+                    return (
+                      <div
+                        key={i}
+                        className="flex flex-col gap-1 px-3 py-2 rounded-xl border
+                                   bg-white dark:bg-slate-800/70
+                                   border-stone-200 dark:border-slate-700/50
+                                   shadow-sm"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <a
+                            href={hit.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-medium text-blue-600 dark:text-blue-400
+                                       hover:underline line-clamp-2 flex-1"
+                          >
+                            {hit.title}
+                          </a>
+                          <button
+                            onClick={() => handleSaveHit(hit, wm.query)}
+                            disabled={isSaving || isSaved}
+                            className={`shrink-0 text-[10px] px-2 py-0.5 rounded
+                                        transition-colors border
+                                        ${isSaved
+                                          ? "text-emerald-600 border-emerald-300 dark:text-emerald-400 dark:border-emerald-700/50 cursor-default"
+                                          : isError
+                                            ? "text-red-500 border-red-300 dark:text-red-400 dark:border-red-700/50"
+                                            : "text-violet-600 hover:text-white hover:bg-violet-600 border-violet-300 dark:text-violet-400 dark:hover:text-white dark:hover:bg-violet-600 dark:border-violet-700/50"
+                                        } disabled:opacity-60`}
+                            title={isError ? String(state) : undefined}
+                          >
+                            {isSaving ? t.workspace.webSaving
+                              : isSaved ? t.workspace.webSaved
+                              : isError ? t.workspace.webSaveFailed(String(state))
+                              : t.workspace.webSaveAsNode}
+                          </button>
+                        </div>
+                        {hit.snippet && (
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-2">
+                            {hit.snippet}
+                          </p>
+                        )}
+                        <p className="text-[9px] text-slate-400 dark:text-slate-600 truncate">
+                          {hit.url}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          }
+
           // Inline task card (generative UI)
           if (msg.role === "task") {
             const tm = msg as TaskMsg;
@@ -440,9 +588,11 @@ export function WorkspaceChat({
       <div className="px-4 pb-4 pt-2 shrink-0 border-t border-stone-200 dark:border-slate-800
                       bg-stone-50 dark:bg-[#0a0f1e]">
         <div className={`flex items-end gap-2 border rounded-xl px-3 py-2 transition-colors shadow-sm
-          ${isTaskMode
-            ? "bg-violet-50 border-violet-300 focus-within:border-violet-500 dark:bg-violet-950/30 dark:border-violet-600/40 dark:focus-within:border-violet-400/60"
-            : "bg-white border-stone-300 focus-within:border-violet-400 dark:bg-slate-800/60 dark:border-slate-600 dark:focus-within:border-violet-500/60"
+          ${webMode
+            ? "bg-emerald-50 border-emerald-300 focus-within:border-emerald-500 dark:bg-emerald-950/20 dark:border-emerald-700/40 dark:focus-within:border-emerald-500/60"
+            : isTaskMode
+              ? "bg-violet-50 border-violet-300 focus-within:border-violet-500 dark:bg-violet-950/30 dark:border-violet-600/40 dark:focus-within:border-violet-400/60"
+              : "bg-white border-stone-300 focus-within:border-violet-400 dark:bg-slate-800/60 dark:border-slate-600 dark:focus-within:border-violet-500/60"
           }`}
         >
           {/* Attachment icon (decorative — clicking opens upload panel via the left side) */}
@@ -458,6 +608,21 @@ export function WorkspaceChat({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
             </svg>
+          </button>
+
+          {/* 🌐 Web search toggle */}
+          <button
+            type="button"
+            onClick={() => setWebMode((v) => !v)}
+            title={webMode ? t.workspace.webSearchOn : t.workspace.webSearchOff}
+            className={`shrink-0 w-7 h-7 mb-0.5 flex items-center justify-center rounded-md
+                        text-sm transition-colors
+                        ${webMode
+                          ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-400 dark:hover:bg-emerald-800/50"
+                          : "text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-stone-100 dark:hover:bg-slate-700/40"
+                        }`}
+          >
+            🌐
           </button>
 
           <textarea
@@ -494,11 +659,13 @@ export function WorkspaceChat({
 
         <div className="mt-1.5 flex items-center justify-between">
           <p className="text-[10px] text-slate-500 dark:text-slate-600">
-            {isTaskMode
-              ? t.workspace.taskModeHint
-              : hasContext
-                ? t.workspace.askingAbout(contextTitles[0] ?? "")
-                : t.workspace.chatModeIdle}
+            {webMode
+              ? t.workspace.webSearchHint
+              : isTaskMode
+                ? t.workspace.taskModeHint
+                : hasContext
+                  ? t.workspace.askingAbout(contextTitles[0] ?? "")
+                  : t.workspace.chatModeIdle}
           </p>
           <p className="text-[10px] text-slate-500 dark:text-slate-600">{t.workspace.enterShortcut}</p>
         </div>

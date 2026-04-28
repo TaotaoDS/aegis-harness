@@ -98,3 +98,36 @@ class KnowledgeSearchHit(BaseModel):
 
 class KnowledgeSearchResponse(BaseModel):
     hits: List[KnowledgeSearchHit]
+
+
+# ---------------------------------------------------------------------------
+# Web search & save (turn external pages into graph nodes)
+# ---------------------------------------------------------------------------
+
+class WebSearchRequest(BaseModel):
+    query: str
+    limit: int = 5
+    engine: str = "duckduckgo"   # "duckduckgo" (fast/reliable) | "bing" | "sogou"
+
+
+class WebSearchHit(BaseModel):
+    title: str
+    url: str
+    snippet: Optional[str] = None
+
+
+class WebSearchResponse(BaseModel):
+    hits: List[WebSearchHit]
+
+
+class WebSaveRequest(BaseModel):
+    url: str
+    title: str
+    snippet: Optional[str] = ""
+    query: Optional[str] = None   # original query text (for traceability)
+
+
+class WebSaveResponse(BaseModel):
+    node_id: str
+    title: str
+    url: str

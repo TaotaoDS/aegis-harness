@@ -46,19 +46,24 @@ interface Props {
   onNodeClick: (node: GraphNode) => void;
   onRefresh: () => void;
   loading: boolean;
+  onDeleteNode?: (nodeId: string) => void | Promise<void>;
 }
+
+// Node colours — adding "web" for externally-saved web search results
+const NODE_COLORS_WITH_WEB: Record<string, string> = {
+  document: "#3b82f6",
+  concept:  "#8b5cf6",
+  tag:      "#10b981",
+  entity:   "#f59e0b",
+  solution: "#06b6d4",
+  web:      "#ec4899",   // pink — visually distinct from internal nodes
+};
 
 // ---------------------------------------------------------------------------
 // Visual constants
 // ---------------------------------------------------------------------------
 
-const NODE_COLORS: Record<string, string> = {
-  document: "#3b82f6",  // blue
-  concept:  "#8b5cf6",  // violet
-  tag:      "#10b981",  // green
-  entity:   "#f59e0b",  // amber
-  solution: "#06b6d4",  // cyan
-};
+const NODE_COLORS = NODE_COLORS_WITH_WEB;
 const FALLBACK_COLOR = "#64748b";
 
 const LINK_COLOR_DARK  = "rgba(148,163,184,0.25)";
@@ -88,6 +93,7 @@ export function KnowledgeGraph({
   onNodeClick,
   onRefresh,
   loading,
+  onDeleteNode,
 }: Props) {
   const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -241,15 +247,37 @@ export function KnowledgeGraph({
         )}
       </div>
 
-      {/* Selected node info strip */}
+      {/* Selected node info strip — with delete action */}
       {selectedNodeId && (
         <div className="shrink-0 border-t border-stone-200 dark:border-slate-800 px-3 py-2 text-xs
-                        text-slate-600 dark:text-slate-400 bg-violet-50/40 dark:bg-violet-900/10">
-          <span className="text-slate-900 dark:text-slate-200 font-medium">{t.knowledge.selected}</span>
-          {nodes.find((n) => n.id === selectedNodeId)?.title ?? selectedNodeId}
-          <span className="ml-2 text-slate-500">
-            {t.knowledge.contextInjected(highlightedIds.size - 1)}
-          </span>
+                        text-slate-600 dark:text-slate-400 bg-violet-50/40 dark:bg-violet-900/10
+                        flex items-center justify-between gap-2">
+          <div className="min-w-0 truncate">
+            <span className="text-slate-900 dark:text-slate-200 font-medium">{t.knowledge.selected}</span>
+            {nodes.find((n) => n.id === selectedNodeId)?.title ?? selectedNodeId}
+            <span className="ml-2 text-slate-500">
+              {t.knowledge.contextInjected(highlightedIds.size - 1)}
+            </span>
+          </div>
+          {onDeleteNode && (
+            <button
+              onClick={() => {
+                const node = nodes.find((n) => n.id === selectedNodeId);
+                if (!node) return;
+                if (window.confirm(t.knowledge.deleteConfirm(node.title))) {
+                  onDeleteNode(selectedNodeId);
+                }
+              }}
+              title={t.knowledge.deleteNode}
+              className="shrink-0 text-[10px] px-2 py-0.5 rounded
+                         text-red-600 hover:text-white hover:bg-red-600
+                         dark:text-red-400 dark:hover:text-white dark:hover:bg-red-600
+                         border border-red-300 dark:border-red-700/50
+                         transition-colors"
+            >
+              ✕ {t.knowledge.deleteNode}
+            </button>
+          )}
         </div>
       )}
     </div>

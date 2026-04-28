@@ -14,6 +14,7 @@ GET /knowledge/nodes/{node_id}
 """
 
 import asyncio
+import json
 import re
 import uuid
 from pathlib import Path
@@ -31,6 +32,11 @@ from ..models import (
     KnowledgeSearchHit,
     NodeOut,
     UploadOut,
+    WebSearchRequest,
+    WebSearchResponse,
+    WebSearchHit,
+    WebSaveRequest,
+    WebSaveResponse,
 )
 from ..rate_limit import limiter
 
@@ -156,6 +162,57 @@ async def get_node(
     if row is None:
         raise HTTPException(404, detail="Node not found.")
     return _node_to_out(row)
+
+
+@router.delete("/nodes/{node_id}", status_code=204)
+async def delete_node(
+    node_id: str,
+    current_user: CurrentUser = Depends(require_active),
+):
+    """Delete a knowledge graph node and all its incident edges (in/out).
+
+    Tenant-scoped — a user can only delete nodes belonging to their tenant.
+    Returns 204 No Content on success, 404 if the node doesn't exist.
+    """
+    from db.connection import get_session, is_db_available
+    from db.models import EdgeModel, NodeModel
+    from sqlalchemy import delete, or_, select
+
+    if not is_db_available():
+        raise HTTPException(503, detail="Database not available.")
+
+    tenant_id = str(current_user.tenant_id)
+    async with get_session() as session:
+        # 1. Verify node exists & belongs to this tenant
+        row = (await session.execute(
+            select(NodeModel.id).where(
+                NodeModel.id == node_id,
+                NodeModel.tenant_id == tenant_id,
+            )
+        )).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, detail="Node not found.")
+
+        # 2. Delete edges where this node is source OR target (also tenant-scoped)
+        await session.execute(
+            delete(EdgeModel).where(
+                EdgeModel.tenant_id == tenant_id,
+                or_(
+                    EdgeModel.source_node_id == node_id,
+                    EdgeModel.target_node_id == node_id,
+                ),
+            )
+        )
+
+        # 3. Delete the node itself
+        await session.execute(
+            delete(NodeModel).where(
+                NodeModel.id == node_id,
+                NodeModel.tenant_id == tenant_id,
+            )
+        )
+        await session.commit()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -392,3 +449,114 @@ def _node_to_out(row) -> NodeOut:
         updated_at=row.updated_at,
         has_embedding=row.embedding is not None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Web search & save (turn external pages into graph nodes)
+# ---------------------------------------------------------------------------
+
+@router.post("/web_search", response_model=WebSearchResponse)
+@limiter.limit("20/minute")
+async def web_search(
+    request: Request,
+    req: WebSearchRequest,
+    current_user: CurrentUser = Depends(require_active),
+):
+    """Search the open web (Bing/Sogou via Playwright) and return top hits.
+
+    Hits are NOT persisted — call ``/web_save`` per result the user wants
+    saved into the knowledge graph.  Runs the (blocking, browser-driven)
+    ``search_web`` in a thread so the event loop stays responsive.
+    """
+    query = (req.query or "").strip()
+    if not query:
+        raise HTTPException(422, detail="query is empty")
+
+    limit = max(1, min(req.limit, 10))
+
+    import logging
+    log = logging.getLogger(__name__)
+
+    def _do_search() -> list[dict]:
+        from core_orchestrator.web_browser import search_web
+        raw = search_web(query, engine=req.engine, num_results=limit)
+        data = json.loads(raw)
+        return data.get("results", [])
+
+    try:
+        results = await asyncio.wait_for(asyncio.to_thread(_do_search), timeout=60.0)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(504, detail="Web search timed out (60s)") from exc
+    except Exception as exc:
+        log.exception("[web_search] failed for query=%r", query)
+        raise HTTPException(502, detail=f"Web search failed: {type(exc).__name__}: {exc}") from exc
+
+    hits = [
+        WebSearchHit(
+            title=(r.get("title") or "")[:300],
+            url=r.get("url") or "",
+            snippet=(r.get("snippet") or r.get("description") or "")[:500],
+        )
+        for r in results
+        if r.get("url")
+    ]
+    return WebSearchResponse(hits=hits)
+
+
+@router.post("/web_save", response_model=WebSaveResponse, status_code=201)
+@limiter.limit("30/minute")
+async def web_save(
+    request: Request,
+    req: WebSaveRequest,
+    current_user: CurrentUser = Depends(require_active),
+):
+    """Convert one web search result into a `web` node in the knowledge graph.
+
+    Stores ``title`` + ``snippet`` immediately (fast).  The original URL is
+    saved in ``node_metadata.url`` so the frontend can deep-link back.
+
+    Deduplicates by SHA-256(tenant_id + url) — calling this with the same URL
+    twice returns the existing node rather than creating a duplicate.
+    """
+    from db.connection import get_session, is_db_available
+    from db.models import NodeModel
+    from db.repository import upsert_node, get_node_by_hash
+    from datetime import datetime, timezone
+    import hashlib
+    import uuid
+
+    if not is_db_available():
+        raise HTTPException(503, detail="Database not available.")
+
+    url = (req.url or "").strip()
+    title = (req.title or "").strip() or url
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(422, detail="url must be absolute (http:// or https://)")
+
+    tenant_id = str(current_user.tenant_id)
+    content_hash = hashlib.sha256(f"{tenant_id}:web:{url}".encode()).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+
+    async with get_session() as session:
+        existing = await get_node_by_hash(session, tenant_id, content_hash)
+        if existing:
+            return WebSaveResponse(node_id=existing.id, title=existing.title, url=url)
+
+        node_id = str(uuid.uuid4())
+        await upsert_node(session, {
+            "id": node_id,
+            "tenant_id": tenant_id,
+            "node_type": "web",
+            "title": title[:500],
+            "content": req.snippet or "",
+            "metadata": {
+                "url": url,
+                "source": "web_search",
+                "query": req.query or "",
+            },
+            "content_hash": content_hash,
+            "created_at": now,
+            "updated_at": now,
+        })
+
+    return WebSaveResponse(node_id=node_id, title=title, url=url)

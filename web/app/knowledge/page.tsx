@@ -134,6 +134,19 @@ export default function KnowledgePage() {
     setSelId(null);
   }, []);
 
+  const handleDeleteNode = useCallback(async (nodeId: string) => {
+    try {
+      const res = await fetch(`/api/proxy/knowledge/nodes/${nodeId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setSelId(null);
+      setCtxIds([]);
+      setCtxTitles([]);
+      await loadGraph();
+    } catch (e) {
+      alert(t.knowledge.deleteFailed(String(e)));
+    }
+  }, [loadGraph, t]);
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -171,6 +184,7 @@ export default function KnowledgePage() {
             onNodeClick={handleNodeClick}
             onRefresh={loadGraph}
             loading={loading}
+            onDeleteNode={handleDeleteNode}
           />
         </div>
       </div>

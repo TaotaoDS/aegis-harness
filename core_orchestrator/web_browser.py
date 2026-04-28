@@ -37,8 +37,11 @@ _TIMEOUT_MS = 30_000    # 30 s per navigation
 _MAX_CHARS   = 4_000    # output cap — prevents context bloat / token waste
 
 _SEARCH_ENGINES: Dict[str, str] = {
-    "bing":  "https://www.bing.com/search?q={query}",
-    "sogou": "https://www.sogou.com/web?query={query}",
+    "bing":   "https://www.bing.com/search?q={query}",
+    "sogou":  "https://www.sogou.com/web?query={query}",
+    # DuckDuckGo's lite/HTML endpoint — simple HTML, no JS, robust for scraping.
+    # Handled via httpx in `_search_duckduckgo` rather than Playwright.
+    "duckduckgo": "https://html.duckduckgo.com/html/?q={query}",
 }
 
 _USER_AGENT = (
@@ -160,6 +163,77 @@ def _html_to_text(html: str, title: str) -> str:
 # Public: search_web
 # ---------------------------------------------------------------------------
 
+def _search_duckduckgo(query: str, num_results: int) -> List[Dict[str, str]]:
+    """Lightweight httpx-based DuckDuckGo HTML scraper.
+
+    Faster (no Chromium boot) and far less likely to be blocked than the
+    JS-rendered engines above.  Falls back gracefully if httpx isn't
+    installed by raising WebBrowserError(retryable=False).
+    """
+    try:
+        import httpx
+    except ImportError as exc:
+        raise WebBrowserError("httpx not installed", retryable=False) from exc
+
+    url = _SEARCH_ENGINES["duckduckgo"].format(query=query.replace(" ", "+"))
+    headers = {"User-Agent": _USER_AGENT, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+
+    try:
+        with httpx.Client(headers=headers, follow_redirects=True, timeout=20.0) as c:
+            resp = c.get(url)
+        resp.raise_for_status()
+    except Exception as exc:
+        raise WebBrowserError(f"DuckDuckGo request failed: {exc}", retryable=True) from exc
+
+    html = resp.text
+
+    # Each result block looks like:
+    #   <a class="result__a" href="...">Title</a>
+    #   ... <a class="result__snippet" ...>Snippet</a>
+    anchor_re = re.compile(
+        r'<a\s+[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.+?)</a>',
+        re.DOTALL,
+    )
+    snippet_re = re.compile(
+        r'<a\s+[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.+?)</a>',
+        re.DOTALL,
+    )
+
+    anchors  = anchor_re.findall(html)
+    snippets = snippet_re.findall(html)
+
+    def _strip_tags(s: str) -> str:
+        s = re.sub(r"<[^>]+>", "", s)
+        s = re.sub(r"&amp;",  "&", s)
+        s = re.sub(r"&quot;", '"', s)
+        s = re.sub(r"&#x27;", "'", s)
+        s = re.sub(r"&#39;",  "'", s)
+        s = re.sub(r"&lt;",   "<", s)
+        s = re.sub(r"&gt;",   ">", s)
+        s = re.sub(r"&nbsp;", " ", s)
+        return s.strip()
+
+    def _decode_ddg_url(href: str) -> str:
+        # DDG wraps URLs in /l/?uddg=<encoded>
+        if href.startswith("/l/?") or href.startswith("//duckduckgo.com/l/?"):
+            from urllib.parse import urlparse, parse_qs, unquote
+            qs = parse_qs(urlparse(href).query)
+            if "uddg" in qs:
+                return unquote(qs["uddg"][0])
+        if href.startswith("//"):
+            return "https:" + href
+        return href
+
+    results: List[Dict[str, str]] = []
+    for i, (href, raw_title) in enumerate(anchors[:num_results]):
+        url = _decode_ddg_url(href)
+        title = _strip_tags(raw_title)
+        snippet = _strip_tags(snippets[i]) if i < len(snippets) else ""
+        if title and url:
+            results.append({"title": title, "url": url, "snippet": snippet})
+    return results
+
+
 def search_web(
     query: str,
     engine: str = "bing",
@@ -189,6 +263,18 @@ def search_web(
             retryable=False,
         )
     num_results = min(max(1, num_results), 10)
+
+    # Fast lane: DuckDuckGo via httpx (no Chromium boot, ~0.3 s typical)
+    if engine == "duckduckgo":
+        results = _search_duckduckgo(query, num_results)
+        if not results:
+            raise WebBrowserError(
+                f"No results extracted from duckduckgo for query '{query}'",
+                retryable=False,
+            )
+        logger.debug("[web_browser] search_web(duckduckgo, %r) → %d", query, len(results))
+        return json.dumps({"results": results})
+
     url = _SEARCH_ENGINES[engine].format(query=query.replace(" ", "+"))
 
     pw, browser, context = _launch_browser()
