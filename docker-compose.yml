@@ -69,6 +69,11 @@ services:
       MOONSHOT_API_KEY:   ${MOONSHOT_API_KEY:-}
       MOONSHOT_BASE_URL:  ${MOONSHOT_BASE_URL:-}
 
+      # ── Search API (联网搜索 — optional but recommended) ──────────────
+      # Set BRAVE_SEARCH_API_KEY to use Brave Search API instead of scraping.
+      # Free tier: 2000 req/month — https://brave.com/search/api/
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+
       # ── Python path (avoid editable installs inside container) ────────
       PYTHONUNBUFFERED: "1"
     ports:

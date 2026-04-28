@@ -31,12 +31,23 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Brave Search API  (recommended for production; set env var to enable)
+# ---------------------------------------------------------------------------
+# Free tier: 2000 req/month — https://brave.com/search/api/
+# When BRAVE_SEARCH_API_KEY is set, ALL auto/bing/duckduckgo requests are
+# routed through the Brave API instead of scraping, which avoids datacenter
+# IP blocking and is TOS-compliant.
+_BRAVE_API_KEY: str = os.environ.get("BRAVE_SEARCH_API_KEY", "")
+_BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
 
 # ---------------------------------------------------------------------------
 # IP → region cache  (avoids repeated geolocation API calls for same IP)
@@ -194,7 +205,18 @@ def _search_duckduckgo(query: str, num_results: int) -> List[Dict[str, str]]:
         raise WebBrowserError("httpx not installed", retryable=False) from exc
 
     url = _SEARCH_ENGINES["duckduckgo"].format(query=query.replace(" ", "+"))
-    headers = {"User-Agent": _USER_AGENT, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+    headers = {
+        "User-Agent":      _USER_AGENT,
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT":             "1",
+        "Connection":      "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    # Small jittered delay — looks more like human browsing, reduces bot-detection risk
+    time.sleep(random.uniform(0.3, 1.0))
 
     try:
         with httpx.Client(headers=headers, follow_redirects=True, timeout=20.0) as c:
@@ -267,6 +289,66 @@ def _search_duckduckgo(query: str, num_results: int) -> List[Dict[str, str]]:
     return results
 
 
+def _search_brave_api(query: str, num_results: int, *, country: str = "") -> List[Dict[str, str]]:
+    """Brave Search Web API — reliable, TOS-compliant, no IP-blocking.
+
+    Requires ``BRAVE_SEARCH_API_KEY`` env var (free tier: 2000 req/month).
+    ``country`` is an ISO-3166-1 alpha-2 code; "CN" localises results to China.
+    Raises WebBrowserError on API key missing, network failure, or HTTP error.
+    """
+    if not _BRAVE_API_KEY:
+        raise WebBrowserError("BRAVE_SEARCH_API_KEY not set", retryable=False)
+
+    try:
+        import httpx
+    except ImportError as exc:
+        raise WebBrowserError("httpx not installed", retryable=False) from exc
+
+    params: Dict[str, str] = {
+        "q":     query,
+        "count": str(min(num_results, 20)),
+    }
+    if country:
+        params["country"]     = country.lower()
+        params["search_lang"] = "zh-hans" if country.upper() == "CN" else "en"
+
+    try:
+        with httpx.Client(timeout=15.0) as c:
+            resp = c.get(
+                _BRAVE_API_URL,
+                params=params,
+                headers={
+                    "Accept":               "application/json",
+                    "Accept-Encoding":      "gzip",
+                    "X-Subscription-Token": _BRAVE_API_KEY,
+                },
+            )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        # 422 = query too long, 429 = rate limit, 401 = bad key
+        retryable = code == 429
+        raise WebBrowserError(
+            f"Brave API HTTP {code}: {exc.response.text[:200]}", retryable=retryable
+        ) from exc
+    except Exception as exc:
+        raise WebBrowserError(f"Brave API request failed: {exc}", retryable=True) from exc
+
+    data = resp.json()
+    results: List[Dict[str, str]] = []
+    for item in data.get("web", {}).get("results", []):
+        title   = item.get("title",       "")
+        url     = item.get("url",         "")
+        snippet = item.get("description", "")
+        if title and url:
+            results.append({"title": title, "url": url, "snippet": snippet})
+        if len(results) >= num_results:
+            break
+
+    logger.debug("[web_browser] brave_api(country=%r) → %d results", country, len(results))
+    return results
+
+
 def _geolocate_ip(ip: str) -> str:
     """Return ISO-3166-1 alpha-2 country code for *ip*, or '' on failure.
 
@@ -334,6 +416,9 @@ def _search_bing_httpx(query: str, num_results: int, *, cn_locale: bool = False)
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8" if cn_locale else "en-US,en;q=0.9",
         "Accept":          "text/html,application/xhtml+xml",
     }
+
+    # Small jittered delay — reduces bot-detection risk on repeated requests
+    time.sleep(random.uniform(0.3, 1.2))
 
     try:
         with httpx.Client(headers=headers, follow_redirects=True, timeout=20.0) as c:
@@ -404,6 +489,28 @@ def search_web(
             retryable=False,
         )
     num_results = min(max(1, num_results), 10)
+
+    # ── Brave Search API: preferred path when API key is configured ───────────
+    # Works from any IP (no scraping, no bot detection), TOS-compliant.
+    if _BRAVE_API_KEY and engine in ("auto", "bing", "duckduckgo"):
+        country = ""
+        if engine == "auto" and client_ip:
+            country = _geolocate_ip(client_ip)
+        elif engine == "bing":
+            country = ""   # caller can pass explicit CN via auto-mode
+        try:
+            results = _search_brave_api(query, num_results, country=country)
+            if results:
+                logger.info(
+                    "[web_browser] brave_api(country=%r) → %d for %r",
+                    country or "global", len(results), query,
+                )
+                return json.dumps({"results": results})
+        except WebBrowserError as exc:
+            if not exc.retryable:
+                raise   # bad key / quota — don't fall through to scrapers
+            logger.warning("[web_browser] brave_api failed (%s); falling back to scraper", exc)
+        # Fall through to scraper-based engines on transient error
 
     # ── auto mode: geo-detect + query-language aware engine selection ──────────
     if engine == "auto":
@@ -587,8 +694,9 @@ SEARCH_WEB_TOOL: Dict[str, Any] = {
     "name": "search_web",
     "description": (
         "Search the web for current information. "
-        "Use when the task needs facts, documentation, library versions, or any "
-        "knowledge that may have changed after your training cutoff. "
+        "When BRAVE_SEARCH_API_KEY is set, uses the Brave Search API (reliable, "
+        "no IP blocking). Otherwise falls back to httpx scrapers. "
+        "engine='auto' geo-detects the client IP and picks the best engine/locale. "
         "Returns JSON: {\"results\": [{\"title\": \"...\", \"url\": \"...\", \"snippet\": \"...\"}]}. "
         "Follow up with read_url to fetch the full content of a promising result. "
         "DO NOT use when your existing knowledge is sufficient."
