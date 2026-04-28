@@ -107,7 +107,7 @@ class KnowledgeSearchResponse(BaseModel):
 class WebSearchRequest(BaseModel):
     query: str
     limit: int = 5
-    engine: str = "duckduckgo"   # "duckduckgo" (fast/reliable) | "bing" | "sogou"
+    engine: str = "auto"   # "auto" (geo-detect) | "bing" | "duckduckgo" | "sogou"
 
 
 class WebSearchHit(BaseModel):

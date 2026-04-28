@@ -33,7 +33,7 @@ export const zh = {
     enterShortcut: "Enter 发送 · Shift+Enter 换行",
     webSearchOn:    "🌐 联网搜索 · 已开启",
     webSearchOff:   "🌐 开启联网搜索",
-    webSearchHint:  "🌐 输入关键词，将通过 DuckDuckGo 联网搜索并展示结果",
+    webSearchHint:  "🌐 输入关键词联网搜索（中国 IP 自动切换至必应·中文，境外使用 DuckDuckGo）",
     webSearchResults: (n: number, q: string) => `🌐 联网搜索「${q}」找到 ${n} 条结果`,
     webSearchFailed: (err: string) => `🌐 联网搜索失败：${err}`,
     webSaveAsNode:  "+ 保存为节点",

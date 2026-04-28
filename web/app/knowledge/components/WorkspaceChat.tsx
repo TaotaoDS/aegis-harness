@@ -115,7 +115,8 @@ async function webSearch(query: string, limit = 5): Promise<WebHit[]> {
   const res = await fetch("/api/proxy/knowledge/web_search", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify({ query, limit, engine: "duckduckgo" }),
+    // engine:"auto" → backend geo-detects client IP and picks Bing (CN) or DuckDuckGo
+    body:    JSON.stringify({ query, limit, engine: "auto" }),
   });
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));

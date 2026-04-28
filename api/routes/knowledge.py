@@ -462,11 +462,19 @@ async def web_search(
     req: WebSearchRequest,
     current_user: CurrentUser = Depends(require_active),
 ):
-    """Search the open web (Bing/Sogou via Playwright) and return top hits.
+    """Search the open web and return top hits.
+
+    Engine selection
+    ----------------
+    When engine="auto" (the default), the server geolocates the originating
+    client IP and picks:
+      • China (CN) → Bing with zh-CN locale  (httpx, accessible in China)
+      • Elsewhere  → DuckDuckGo              (httpx, fast, privacy-friendly)
+    Both paths fall back to the other engine automatically on failure.
 
     Hits are NOT persisted — call ``/web_save`` per result the user wants
-    saved into the knowledge graph.  Runs the (blocking, browser-driven)
-    ``search_web`` in a thread so the event loop stays responsive.
+    saved into the knowledge graph.  Runs the blocking ``search_web`` in a
+    thread so the event loop stays responsive.
     """
     query = (req.query or "").strip()
     if not query:
@@ -474,12 +482,20 @@ async def web_search(
 
     limit = max(1, min(req.limit, 10))
 
+    # Resolve the real client IP (works behind Nginx / Traefik reverse proxy)
+    client_ip: str = (
+        request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or request.headers.get("X-Real-IP", "").strip()
+        or (request.client.host if request.client else "")
+    )
+
     import logging
     log = logging.getLogger(__name__)
+    log.debug("[web_search] query=%r engine=%r client_ip=%s", query, req.engine, client_ip)
 
     def _do_search() -> list[dict]:
         from core_orchestrator.web_browser import search_web
-        raw = search_web(query, engine=req.engine, num_results=limit)
+        raw = search_web(query, engine=req.engine, num_results=limit, client_ip=client_ip)
         data = json.loads(raw)
         return data.get("results", [])
 

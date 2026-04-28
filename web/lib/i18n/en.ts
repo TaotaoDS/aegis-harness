@@ -29,7 +29,7 @@ export const en: Translations = {
     enterShortcut: "Enter to send · Shift+Enter for newline",
     webSearchOn:    "🌐 Web search · ON",
     webSearchOff:   "🌐 Enable web search",
-    webSearchHint:  "🌐 Type keywords — results come from DuckDuckGo",
+    webSearchHint:  "🌐 Type keywords to search the web (auto-selects Bing zh-CN for China IPs, DuckDuckGo elsewhere)",
     webSearchResults: (n: number, q: string) => `🌐 Web search "${q}" — ${n} results`,
     webSearchFailed: (err: string) => `🌐 Web search failed: ${err}`,
     webSaveAsNode:  "+ Save as node",

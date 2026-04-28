@@ -2,8 +2,18 @@
 
 Public API
 ----------
-search_web(query, engine="bing", num_results=5) -> str
-    Navigate a search engine, extract top N results as JSON.
+search_web(query, engine="auto", num_results=5, client_ip=None) -> str
+    Search the web and return top N results as a JSON string.
+
+    engine values
+    ~~~~~~~~~~~~~
+    "auto"       — auto-select based on client IP geolocation:
+                     China (CN) → Bing with Chinese locale (httpx, no browser)
+                     Elsewhere  → DuckDuckGo (httpx, no browser)
+                   Falls back to the other engine if the primary fails.
+    "duckduckgo" — DuckDuckGo lite HTML endpoint via httpx (fast, no Playwright)
+    "bing"       — Bing search via httpx (li.b_algo results, mkt=zh-CN aware)
+    "sogou"      — Sogou via headless Playwright (legacy; kept for compatibility)
 
 read_url(url) -> str
     Load a page, strip boilerplate, return clean Markdown-ish plain text.
@@ -13,9 +23,8 @@ WebBrowserError
     Has a ``retryable`` attribute: True for transient network faults,
     False for structural errors (e.g. page permanently blocked).
 
-Both functions use the sync Playwright API to match the codebase's synchronous
-thread-based execution model. Each call opens and closes its own browser context
-— no shared state, fully thread-safe for ParallelExecutor workers.
+Playwright is only used for read_url and engine="sogou". All httpx-based paths
+are synchronous and thread-safe for ParallelExecutor workers.
 """
 
 from __future__ import annotations
@@ -25,9 +34,16 @@ import logging
 import random
 import re
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# IP → region cache  (avoids repeated geolocation API calls for same IP)
+# ---------------------------------------------------------------------------
+
+_ip_region_cache: Dict[str, Tuple[str, float]] = {}   # ip → (country_code, timestamp)
+_IP_CACHE_TTL = 3600.0   # 1 hour
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -37,10 +53,12 @@ _TIMEOUT_MS = 30_000    # 30 s per navigation
 _MAX_CHARS   = 4_000    # output cap — prevents context bloat / token waste
 
 _SEARCH_ENGINES: Dict[str, str] = {
-    "bing":   "https://www.bing.com/search?q={query}",
-    "sogou":  "https://www.sogou.com/web?query={query}",
-    # DuckDuckGo's lite/HTML endpoint — simple HTML, no JS, robust for scraping.
-    # Handled via httpx in `_search_duckduckgo` rather than Playwright.
+    # "bing" and "duckduckgo" are handled by httpx scrapers (no Playwright).
+    # "sogou" still uses Playwright (legacy; URL-obfuscated so httpx can't decode hrefs).
+    # "auto" is a meta-engine that picks bing/duckduckgo based on client IP.
+    "auto":       "",
+    "bing":       "https://www.bing.com/search?q={query}&mkt={mkt}&setlang={lang}&count={count}",
+    "sogou":      "https://www.sogou.com/web?query={query}",
     "duckduckgo": "https://html.duckduckgo.com/html/?q={query}",
 }
 
@@ -187,6 +205,16 @@ def _search_duckduckgo(query: str, num_results: int) -> List[Dict[str, str]]:
 
     html = resp.text
 
+    # DuckDuckGo returns a CAPTCHA / anomaly challenge when our server IP is
+    # rate-limited or flagged.  Detect it and raise retryable so auto-mode
+    # can fall back to Bing instead of silently returning 0 results.
+    if "anomaly.js" in html and ("botnet" in html or "challenge" in html.lower()):
+        raise WebBrowserError(
+            "DuckDuckGo returned a bot-challenge page (rate-limited). "
+            "Will retry via fallback engine.",
+            retryable=True,
+        )
+
     # Each result block looks like:
     #   <a class="result__a" href="...">Title</a>
     #   ... <a class="result__snippet" ...>Snippet</a>
@@ -225,46 +253,212 @@ def _search_duckduckgo(query: str, num_results: int) -> List[Dict[str, str]]:
         return href
 
     results: List[Dict[str, str]] = []
-    for i, (href, raw_title) in enumerate(anchors[:num_results]):
+    for i, (href, raw_title) in enumerate(anchors[:num_results * 2]):  # over-fetch to cover ads
         url = _decode_ddg_url(href)
         title = _strip_tags(raw_title)
         snippet = _strip_tags(snippets[i]) if i < len(snippets) else ""
-        if title and url:
+        # Skip DDG ad redirect URLs (y.js?ad_domain=...) — keep only real results
+        if not url or "duckduckgo.com/y.js" in url or not url.startswith("http"):
+            continue
+        if title:
             results.append({"title": title, "url": url, "snippet": snippet})
+        if len(results) >= num_results:
+            break
+    return results
+
+
+def _geolocate_ip(ip: str) -> str:
+    """Return ISO-3166-1 alpha-2 country code for *ip*, or '' on failure.
+
+    Uses ip-api.com (free tier, no API key, 45 req/min).
+    Results are cached in-process for ``_IP_CACHE_TTL`` seconds so repeated
+    calls for the same visitor IP don't count against the rate limit.
+
+    Private / loopback addresses (127.x, 10.x, 192.168.x, ::1, etc.) are
+    returned as '' immediately — no network call.
+    """
+    import ipaddress
+
+    # Skip non-routable addresses (local dev / Docker internal)
+    try:
+        addr = ipaddress.ip_address(ip)
+        if addr.is_private or addr.is_loopback or addr.is_link_local:
+            return ""
+    except ValueError:
+        return ""
+
+    now = time.time()
+    cached = _ip_region_cache.get(ip)
+    if cached and now - cached[1] < _IP_CACHE_TTL:
+        return cached[0]
+
+    try:
+        import httpx
+        resp = httpx.get(
+            f"http://ip-api.com/json/{ip}?fields=countryCode",
+            timeout=3.0,
+        )
+        code: str = resp.json().get("countryCode", "") if resp.status_code == 200 else ""
+    except Exception as exc:
+        logger.debug("[web_browser] geolocate %s failed: %s", ip, exc)
+        code = ""
+
+    _ip_region_cache[ip] = (code, now)
+    logger.debug("[web_browser] geolocate %s → %r", ip, code)
+    return code
+
+
+def _search_bing_httpx(query: str, num_results: int, *, cn_locale: bool = False) -> List[Dict[str, str]]:
+    """httpx-based Bing scraper — no Playwright required.
+
+    Uses ``li.b_algo h2 a`` anchors which Bing has kept stable across redesigns.
+    ``cn_locale=True`` adds ``mkt=zh-CN&setlang=zh-CN&cc=CN`` for Chinese-biased
+    results (better coverage of Chinese-language content).
+    """
+    try:
+        import httpx
+        from bs4 import BeautifulSoup
+    except ImportError as exc:
+        raise WebBrowserError("httpx or beautifulsoup4 not installed", retryable=False) from exc
+
+    mkt  = "zh-CN" if cn_locale else "en-US"
+    lang = "zh-CN" if cn_locale else "en-US"
+    url  = (
+        f"https://www.bing.com/search"
+        f"?q={query.replace(' ', '+')}"
+        f"&mkt={mkt}&setlang={lang}"
+        f"&count={min(num_results * 2, 20)}"
+    )
+    headers = {
+        "User-Agent":      _USER_AGENT,
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8" if cn_locale else "en-US,en;q=0.9",
+        "Accept":          "text/html,application/xhtml+xml",
+    }
+
+    try:
+        with httpx.Client(headers=headers, follow_redirects=True, timeout=20.0) as c:
+            resp = c.get(url)
+        resp.raise_for_status()
+    except Exception as exc:
+        raise WebBrowserError(f"Bing request failed: {exc}", retryable=True) from exc
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results: List[Dict[str, str]] = []
+
+    for item in soup.select("li.b_algo"):
+        a = item.select_one("h2 a")
+        if not a:
+            continue
+        title = a.get_text(strip=True)
+        href  = a.get("href", "")
+        if not href.startswith("http"):
+            continue
+        # Snippet: Bing puts it in p.b_algoSlug, .b_caption p, or .b_paractl
+        snip_el = item.select_one("p.b_algoSlug, .b_caption p, .b_paractl, p")
+        snippet = snip_el.get_text(strip=True)[:300] if snip_el else ""
+        results.append({"title": title, "url": href, "snippet": snippet})
+        if len(results) >= num_results:
+            break
+
     return results
 
 
 def search_web(
     query: str,
-    engine: str = "bing",
+    engine: str = "auto",
     num_results: int = 5,
+    client_ip: Optional[str] = None,
 ) -> str:
     """Search the web and return top N results as a JSON string.
 
     Parameters
     ----------
     query      : The search query.
-    engine     : "bing" (default) or "sogou".
+    engine     : Engine name — "auto" (default), "bing", "duckduckgo", or "sogou".
     num_results: Number of results to return (capped at 10).
+    client_ip  : Originating client IP used for geolocation when engine="auto".
+                 If omitted or unroutable, auto-mode defaults to DuckDuckGo.
 
     Returns
     -------
-    JSON string: {"results": [{"title": "...", "url": "..."}, ...]}
+    JSON string: {"results": [{"title": "...", "url": "...", "snippet": "..."}]}
 
     Raises
     ------
     WebBrowserError
         retryable=True  on navigation timeout or DNS failure.
         retryable=False on unsupported engine or zero results extracted.
+
+    Auto-selection logic
+    --------------------
+    "auto" geolocates ``client_ip`` via ip-api.com (3 s timeout, cached 1 h):
+      • CN  → Bing (zh-CN locale, httpx) → fallback DuckDuckGo
+      • else → DuckDuckGo (httpx)         → fallback Bing (en-US locale, httpx)
+    Bing and DuckDuckGo are both httpx-based — no Playwright required.
+    "sogou" still uses Playwright (its result URLs are obfuscated server-side).
     """
-    if engine not in _SEARCH_ENGINES:
+    _valid = set(_SEARCH_ENGINES.keys())
+    if engine not in _valid:
         raise WebBrowserError(
-            f"Unsupported search engine '{engine}'. Choose from: {list(_SEARCH_ENGINES)}",
+            f"Unsupported search engine '{engine}'. Choose from: {sorted(_valid)}",
             retryable=False,
         )
     num_results = min(max(1, num_results), 10)
 
-    # Fast lane: DuckDuckGo via httpx (no Chromium boot, ~0.3 s typical)
+    # ── auto mode: geo-detect + query-language aware engine selection ──────────
+    if engine == "auto":
+        country = _geolocate_ip(client_ip) if client_ip else ""
+        is_cn   = country == "CN"
+        # Detect CJK characters in query — Bing zh-CN works from datacenter IPs
+        # only for Chinese/Japanese/Korean queries; English queries are CAPTCHA'd.
+        is_cjk  = any(
+            "　" <= c <= "鿿" or "가" <= c <= "힯" or "぀" <= c <= "ヿ"
+            for c in query
+        )
+
+        if is_cn and is_cjk:
+            # CN user + Chinese query → Bing zh-CN (best Chinese content, server-accessible)
+            primary_fn  = lambda: _search_bing_httpx(query, num_results, cn_locale=True)
+            fallback_fn = lambda: _search_duckduckgo(query, num_results)
+            primary_name, fallback_name = "bing(zh-CN)", "duckduckgo"
+        else:
+            # Non-CN user OR English/mixed query → DuckDuckGo (reliable from any server IP)
+            # Fallback: Bing zh-CN can still surface some results for mixed queries
+            primary_fn  = lambda: _search_duckduckgo(query, num_results)
+            fallback_fn = lambda: _search_bing_httpx(query, num_results, cn_locale=is_cn)
+            primary_name, fallback_name = "duckduckgo", "bing(zh-CN)" if is_cn else "bing"
+
+        logger.info(
+            "[web_browser] auto-select: client_ip=%s country=%r cjk=%s → primary=%s",
+            client_ip, country, is_cjk, primary_name,
+        )
+
+        try:
+            results = primary_fn()
+            if results:
+                logger.debug("[web_browser] %s → %d results", primary_name, len(results))
+                return json.dumps({"results": results})
+            logger.warning("[web_browser] %s returned 0 results; trying %s", primary_name, fallback_name)
+        except WebBrowserError as exc:
+            logger.warning("[web_browser] %s failed (%s); trying %s", primary_name, exc, fallback_name)
+
+        try:
+            results = fallback_fn()
+        except WebBrowserError as exc:
+            raise WebBrowserError(
+                f"Both {primary_name} and {fallback_name} failed for query '{query}'",
+                retryable=True,
+            ) from exc
+
+        if not results:
+            raise WebBrowserError(
+                f"No results extracted (auto-mode) for query '{query}'",
+                retryable=True,
+            )
+        logger.debug("[web_browser] %s (fallback) → %d results", fallback_name, len(results))
+        return json.dumps({"results": results})
+
+    # ── DuckDuckGo: httpx, no Playwright ─────────────────────────────────────
     if engine == "duckduckgo":
         results = _search_duckduckgo(query, num_results)
         if not results:
@@ -275,7 +469,23 @@ def search_web(
         logger.debug("[web_browser] search_web(duckduckgo, %r) → %d", query, len(results))
         return json.dumps({"results": results})
 
-    url = _SEARCH_ENGINES[engine].format(query=query.replace(" ", "+"))
+    # ── Bing: httpx, no Playwright ────────────────────────────────────────────
+    # Note: Bing blocks datacenter/cloud IPs for en-US requests with CAPTCHA.
+    # zh-CN locale requests succeed from server IPs for CJK-language queries.
+    # For explicit engine="bing", we use zh-CN locale to maximise server compatibility.
+    if engine == "bing":
+        results = _search_bing_httpx(query, num_results, cn_locale=True)
+        if not results:
+            raise WebBrowserError(
+                f"No results extracted from bing for query '{query}'",
+                retryable=False,
+            )
+        logger.debug("[web_browser] search_web(bing, %r) → %d", query, len(results))
+        return json.dumps({"results": results})
+
+    # ── Sogou: Playwright (legacy, kept for compatibility) ────────────────────
+    # Note: Sogou obfuscates result URLs so httpx scraping can't decode hrefs.
+    url = _SEARCH_ENGINES["sogou"].format(query=query.replace(" ", "+"))
 
     pw, browser, context = _launch_browser()
     try:
@@ -284,21 +494,21 @@ def search_web(
             page.goto(url, timeout=_TIMEOUT_MS, wait_until="domcontentloaded")
         except Exception as exc:
             raise WebBrowserError(
-                f"Navigation to {engine} failed: {exc}",
+                f"Navigation to sogou failed: {exc}",
                 retryable=True,
             ) from exc
 
         time.sleep(random.uniform(0.5, 1.5))
 
-        results = _extract_search_results(page, engine, num_results)
+        results = _extract_search_results(page, "sogou", num_results)
         if not results:
             raise WebBrowserError(
-                f"No results extracted from {engine} for query '{query}'. "
+                f"No results extracted from sogou for query '{query}'. "
                 "The page structure may have changed or the query was blocked.",
                 retryable=False,
             )
 
-        logger.debug("[web_browser] search_web(%r) → %d results", query, len(results))
+        logger.debug("[web_browser] search_web(sogou, %r) → %d results", query, len(results))
         return json.dumps({"results": results})
     finally:
         context.close()
@@ -376,10 +586,10 @@ def read_url(url: str) -> str:
 SEARCH_WEB_TOOL: Dict[str, Any] = {
     "name": "search_web",
     "description": (
-        "Search the web for current information using Bing or Sogou. "
+        "Search the web for current information. "
         "Use when the task needs facts, documentation, library versions, or any "
         "knowledge that may have changed after your training cutoff. "
-        "Returns JSON: {\"results\": [{\"title\": \"...\", \"url\": \"...\"}]}. "
+        "Returns JSON: {\"results\": [{\"title\": \"...\", \"url\": \"...\", \"snippet\": \"...\"}]}. "
         "Follow up with read_url to fetch the full content of a promising result. "
         "DO NOT use when your existing knowledge is sufficient."
     ),
@@ -392,10 +602,12 @@ SEARCH_WEB_TOOL: Dict[str, Any] = {
             },
             "engine": {
                 "type": "string",
-                "enum": ["bing", "sogou"],
+                "enum": ["auto", "bing", "duckduckgo", "sogou"],
                 "description": (
-                    "Search engine. Default 'bing' for English content; "
-                    "'sogou' for Chinese-language queries."
+                    "Search engine. 'auto' (default) geo-detects the client and picks "
+                    "Bing (zh-CN) for China or DuckDuckGo elsewhere. "
+                    "'bing' forces English Bing. 'duckduckgo' forces DDG. "
+                    "'sogou' uses headless Playwright (slow, legacy)."
                 ),
             },
             "num_results": {
