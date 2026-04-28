@@ -139,10 +139,11 @@ export default function KnowledgePage() {
   // ---------------------------------------------------------------------------
 
   return (
+    // Shell already gives us the full content area (no padding) when isFullBleed,
+    // so we render at full width/height — no negative margins needed.
     <div
       ref={containerRef}
-      className="-mx-8 -my-8 flex overflow-hidden bg-[var(--bg-app)]"
-      style={{ height: "calc(100vh - 0px)" }}
+      className="flex w-full h-screen overflow-hidden bg-[var(--bg-app)]"
     >
       {/* ── Left panel: Upload + Graph ─────────────────────────────────── */}
       <div

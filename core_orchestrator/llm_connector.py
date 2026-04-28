@@ -87,7 +87,10 @@ class OpenAIConnector:
         base_url: Optional[str] = None,
     ) -> str:
         OpenAI = self._import_openai()
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        # Bound the request — without a timeout the client will hang forever if
+        # the upstream provider drops the connection silently.  120 s is enough
+        # for long generations but short enough to fail loudly on outages.
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0, max_retries=1)
         resp = client.chat.completions.create(
             model=model_id,
             max_tokens=max_tokens,
@@ -128,7 +131,7 @@ class OpenAIConnector:
         This enables tools like read_file to return real content.
         """
         OpenAI = self._import_openai()
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0, max_retries=1)
 
         # Convert provider-agnostic tool defs to OpenAI format
         openai_tools = [

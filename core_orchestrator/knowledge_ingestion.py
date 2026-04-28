@@ -310,19 +310,35 @@ async def run_ingestion(
             return
 
         # ── 2. LLM: raw text → Markdown ──────────────────────────────────────
+        # Hard upper bound (140s) so a stuck upstream call cannot hang the
+        # background task forever.  Falls back to raw_text on timeout/failure.
         await _set_progress(node_id, tenant_id, "extracting_content", 35)
+        logger.info("[Ingestion] Calling LLM to extract markdown (%d chars input)", len(raw_text))
         try:
-            markdown = await asyncio.to_thread(_llm_to_markdown, raw_text)
-            logger.debug("[Ingestion] Markdown extracted (%d chars)", len(markdown))
+            markdown = await asyncio.wait_for(
+                asyncio.to_thread(_llm_to_markdown, raw_text),
+                timeout=140.0,
+            )
+            logger.info("[Ingestion] Markdown extracted (%d chars)", len(markdown))
+        except asyncio.TimeoutError:
+            logger.warning("[Ingestion] LLM markdown step timed out — using raw text")
+            markdown = raw_text[:_MAX_RAW_CHARS]
         except Exception as exc:
             logger.warning("[Ingestion] LLM markdown step failed (%s) — using raw text", exc)
             markdown = raw_text[:_MAX_RAW_CHARS]
 
         # ── 3. LLM: Markdown → concept list ──────────────────────────────────
         await _set_progress(node_id, tenant_id, "extracting_concepts", 60)
+        logger.info("[Ingestion] Calling LLM to extract concepts")
         try:
-            concepts = await asyncio.to_thread(_llm_extract_concepts, markdown)
+            concepts = await asyncio.wait_for(
+                asyncio.to_thread(_llm_extract_concepts, markdown),
+                timeout=140.0,
+            )
             logger.info("[Ingestion] Concepts extracted (%d): %s", len(concepts), concepts)
+        except asyncio.TimeoutError:
+            logger.warning("[Ingestion] LLM concept step timed out — no concepts")
+            concepts = []
         except Exception as exc:
             logger.warning("[Ingestion] LLM concept step failed (%s) — no concepts", exc)
             concepts = []
