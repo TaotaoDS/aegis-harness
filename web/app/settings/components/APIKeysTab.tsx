@@ -12,6 +12,7 @@ interface APIKeys {
   moonshot?: string;
   google?: string;
   qwen?: string;
+  brave_search?: string;
 }
 
 interface Props {
@@ -19,7 +20,16 @@ interface Props {
   onSave: (keys: APIKeys) => Promise<void>;
 }
 
-const PROVIDERS = [
+interface Provider {
+  key: keyof APIKeys;
+  name: string;
+  placeholder: string;
+  link: string;
+  badge: string;
+  hint?: string;
+}
+
+const PROVIDERS: Provider[] = [
   {
     key: "anthropic" as keyof APIKeys,
     name: "Anthropic (Claude)",
@@ -75,6 +85,14 @@ const PROVIDERS = [
     placeholder: "sk-…",
     link: "https://dashscope.console.aliyun.com/apiKey",
     badge: "text-orange-300 bg-orange-900/30 border-orange-700",
+  },
+  {
+    key: "brave_search" as keyof APIKeys,
+    name: "Brave Search 🌐",
+    placeholder: "BSA…",
+    link: "https://brave.com/search/api/",
+    badge: "text-amber-300 bg-amber-900/30 border-amber-700",
+    hint: "联网搜索功能所需。免费套餐 2000 次/月，无此 Key 时自动降级为直接爬取。",
   },
 ];
 
@@ -149,7 +167,7 @@ export function APIKeysTab({ initial, onSave }: Props) {
               key={p.key}
               className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 flex items-center gap-4"
             >
-              <div className="w-40 shrink-0">
+              <div className="w-44 shrink-0">
                 <span
                   className={`text-xs font-semibold px-2 py-0.5 rounded border ${p.badge}`}
                 >
@@ -157,6 +175,9 @@ export function APIKeysTab({ initial, onSave }: Props) {
                 </span>
                 {isSet && (
                   <div className="text-xs text-green-400 mt-1">{t.apikeys.configured}</div>
+                )}
+                {p.hint && (
+                  <div className="text-[10px] text-slate-500 mt-1 leading-tight">{p.hint}</div>
                 )}
               </div>
 

@@ -493,9 +493,25 @@ async def web_search(
     log = logging.getLogger(__name__)
     log.debug("[web_search] query=%r engine=%r client_ip=%s", query, req.engine, client_ip)
 
+    # Load per-tenant Brave Search API key from settings (fallback to env var inside search_web)
+    tenant_brave_key: str = ""
+    try:
+        from ..settings_service import get_setting
+        stored = await get_setting(str(current_user.tenant_id), "api_keys")
+        if isinstance(stored, dict):
+            tenant_brave_key = stored.get("brave_search", "") or ""
+    except Exception:
+        pass  # non-fatal — search_web falls back to env var
+
     def _do_search() -> list[dict]:
         from core_orchestrator.web_browser import search_web
-        raw = search_web(query, engine=req.engine, num_results=limit, client_ip=client_ip)
+        raw = search_web(
+            query,
+            engine=req.engine,
+            num_results=limit,
+            client_ip=client_ip,
+            brave_api_key=tenant_brave_key or None,
+        )
         data = json.loads(raw)
         return data.get("results", [])
 

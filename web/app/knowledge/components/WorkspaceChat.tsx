@@ -111,6 +111,14 @@ async function searchNodes(query: string, limit = 5): Promise<SearchHit[]> {
   return data.hits ?? [];
 }
 
+/** Structured web-search error — carries an action hint for the UI. */
+export class WebSearchError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: "missing_key" | "quota" | "other",
+  ) { super(message); this.name = "WebSearchError"; }
+}
+
 async function webSearch(query: string, limit = 5): Promise<WebHit[]> {
   const res = await fetch("/api/proxy/knowledge/web_search", {
     method:  "POST",
@@ -120,7 +128,16 @@ async function webSearch(query: string, limit = 5): Promise<WebHit[]> {
   });
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));
-    throw new Error((j as { detail?: string }).detail ?? `HTTP ${res.status}`);
+    const detail: string = (j as { detail?: string }).detail ?? `HTTP ${res.status}`;
+    // Classify the error so the UI can show the right prompt
+    const d = detail.toLowerCase();
+    if (res.status === 400 && (d.includes("api key") || d.includes("not configured") || d.includes("not set"))) {
+      throw new WebSearchError(detail, "missing_key");
+    }
+    if (res.status === 400 && (d.includes("quota") || d.includes("429") || d.includes("quota exceeded"))) {
+      throw new WebSearchError(detail, "quota");
+    }
+    throw new WebSearchError(detail, "other");
   }
   const data = await res.json() as { hits?: WebHit[] };
   return data.hits ?? [];
@@ -201,6 +218,8 @@ export function WorkspaceChat({
   const [webMode,       setWebMode]       = useState(false);
   // Map from hit URL → save state: undefined | "saving" | "saved" | error string
   const [saveStates,    setSaveStates]    = useState<Record<string, string>>({});
+  // Web search key alert: null | "missing_key" | "quota"
+  const [webKeyAlert,   setWebKeyAlert]   = useState<"missing_key" | "quota" | null>(null);
   const bottomRef                          = useRef<HTMLDivElement>(null);
   const textareaRef                        = useRef<HTMLTextAreaElement>(null);
 
@@ -246,6 +265,7 @@ export function WorkspaceChat({
     // ── Web search mode ─────────────────────────────────────────────────────
     if (webMode && parsed.mode !== "task") {
       setLoading(true);
+      setWebKeyAlert(null);
       try {
         const hits = await webSearch(raw, 5);
         setMessages((prev) => [
@@ -261,6 +281,9 @@ export function WorkspaceChat({
           ]);
         }
       } catch (err) {
+        if (err instanceof WebSearchError && (err.kind === "missing_key" || err.kind === "quota")) {
+          setWebKeyAlert(err.kind);
+        }
         setMessages((prev) => [
           ...prev,
           mkMsg("system", t.workspace.webSearchFailed(String(err))),
@@ -438,6 +461,34 @@ export function WorkspaceChat({
               {t.workspace.contextNodesCount(contextTitles.length)}
             </span>
           </div>
+        </div>
+      )}
+
+      {/* ── Brave Search API key alert banner ── */}
+      {webKeyAlert && (
+        <div className="shrink-0 px-4 py-2 bg-amber-950/70 border-b border-amber-700/60 flex items-start gap-2">
+          <span className="text-amber-400 shrink-0 text-sm mt-0.5">⚠️</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-amber-300 text-xs font-medium leading-snug">
+              {webKeyAlert === "missing_key"
+                ? t.workspace.webSearchNeedsKey
+                : t.workspace.webSearchQuotaExceeded}
+            </p>
+          </div>
+          <a
+            href="/settings?tab=apikeys"
+            className="shrink-0 text-[10px] px-2 py-0.5 rounded border
+                       border-amber-600 text-amber-300 hover:bg-amber-700/40 transition-colors"
+          >
+            {t.workspace.webSearchGoToSettings}
+          </a>
+          <button
+            onClick={() => setWebKeyAlert(null)}
+            className="shrink-0 text-amber-500 hover:text-amber-300 text-xs leading-none"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
         </div>
       )}
 

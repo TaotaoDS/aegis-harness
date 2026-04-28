@@ -289,15 +289,27 @@ def _search_duckduckgo(query: str, num_results: int) -> List[Dict[str, str]]:
     return results
 
 
-def _search_brave_api(query: str, num_results: int, *, country: str = "") -> List[Dict[str, str]]:
+def _search_brave_api(
+    query: str,
+    num_results: int,
+    *,
+    country: str = "",
+    api_key: str = "",
+) -> List[Dict[str, str]]:
     """Brave Search Web API — reliable, TOS-compliant, no IP-blocking.
 
-    Requires ``BRAVE_SEARCH_API_KEY`` env var (free tier: 2000 req/month).
+    ``api_key`` overrides the module-level ``_BRAVE_API_KEY`` (env var).
+    Requires a non-empty key; free tier: 2000 req/month.
     ``country`` is an ISO-3166-1 alpha-2 code; "CN" localises results to China.
     Raises WebBrowserError on API key missing, network failure, or HTTP error.
     """
-    if not _BRAVE_API_KEY:
-        raise WebBrowserError("BRAVE_SEARCH_API_KEY not set", retryable=False)
+    key = api_key or _BRAVE_API_KEY
+    if not key:
+        raise WebBrowserError(
+            "Brave Search API key not configured. "
+            "Add your key at Settings → API Keys → Brave Search.",
+            retryable=False,
+        )
 
     try:
         import httpx
@@ -320,14 +332,28 @@ def _search_brave_api(query: str, num_results: int, *, country: str = "") -> Lis
                 headers={
                     "Accept":               "application/json",
                     "Accept-Encoding":      "gzip",
-                    "X-Subscription-Token": _BRAVE_API_KEY,
+                    "X-Subscription-Token": key,
                 },
             )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
-        # 422 = query too long, 429 = rate limit, 401 = bad key
+        # 429 = rate limit (quota exceeded) — retryable via scrapers
+        # 401 / 403 = bad/expired key — not retryable
+        # 422 = invalid request param — not retryable
         retryable = code == 429
+        if code in (401, 403):
+            raise WebBrowserError(
+                f"Brave Search API key invalid or expired (HTTP {code}). "
+                "Please update your key at Settings → API Keys → Brave Search.",
+                retryable=False,
+            ) from exc
+        if code == 429:
+            raise WebBrowserError(
+                "Brave Search API quota exceeded (HTTP 429). "
+                "Free tier is 2000 req/month. Update your key or wait for quota reset.",
+                retryable=True,
+            ) from exc
         raise WebBrowserError(
             f"Brave API HTTP {code}: {exc.response.text[:200]}", retryable=retryable
         ) from exc
@@ -453,16 +479,20 @@ def search_web(
     engine: str = "auto",
     num_results: int = 5,
     client_ip: Optional[str] = None,
+    brave_api_key: Optional[str] = None,
 ) -> str:
     """Search the web and return top N results as a JSON string.
 
     Parameters
     ----------
-    query      : The search query.
-    engine     : Engine name — "auto" (default), "bing", "duckduckgo", or "sogou".
-    num_results: Number of results to return (capped at 10).
-    client_ip  : Originating client IP used for geolocation when engine="auto".
-                 If omitted or unroutable, auto-mode defaults to DuckDuckGo.
+    query        : The search query.
+    engine       : Engine name — "auto" (default), "bing", "duckduckgo", or "sogou".
+    num_results  : Number of results to return (capped at 10).
+    client_ip    : Originating client IP used for geolocation when engine="auto".
+                   If omitted or unroutable, auto-mode defaults to DuckDuckGo.
+    brave_api_key: Override for the Brave Search API key.  When provided, takes
+                   precedence over ``BRAVE_SEARCH_API_KEY`` env var.  Pass the
+                   per-tenant key stored in Settings → API Keys → Brave Search.
 
     Returns
     -------
@@ -490,16 +520,21 @@ def search_web(
         )
     num_results = min(max(1, num_results), 10)
 
+    # Effective Brave key: caller-supplied (per-tenant DB key) beats env var.
+    _effective_brave_key = brave_api_key or _BRAVE_API_KEY
+
     # ── Brave Search API: preferred path when API key is configured ───────────
     # Works from any IP (no scraping, no bot detection), TOS-compliant.
-    if _BRAVE_API_KEY and engine in ("auto", "bing", "duckduckgo"):
+    if _effective_brave_key and engine in ("auto", "bing", "duckduckgo"):
         country = ""
         if engine == "auto" and client_ip:
             country = _geolocate_ip(client_ip)
         elif engine == "bing":
             country = ""   # caller can pass explicit CN via auto-mode
         try:
-            results = _search_brave_api(query, num_results, country=country)
+            results = _search_brave_api(
+                query, num_results, country=country, api_key=_effective_brave_key
+            )
             if results:
                 logger.info(
                     "[web_browser] brave_api(country=%r) → %d for %r",

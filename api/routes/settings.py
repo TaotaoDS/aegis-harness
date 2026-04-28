@@ -68,16 +68,31 @@ def _validate_key(key: str) -> None:
 
 
 def _mask_api_keys(data: Any) -> Any:
+    """Mask all string values inside the ``api_keys`` dict.
+
+    Every entry in api_keys is a credential (API key, secret, token) and
+    should never be returned in full to the client, regardless of field name.
+    Shows only the last 4 characters so the user can confirm which key is set.
+    """
     if isinstance(data, dict):
-        return {k: _mask_if_key(k, v) for k, v in data.items()}
+        return {k: _mask_credential(v) for k, v in data.items()}
     return data
 
 
+def _mask_credential(value: Any) -> Any:
+    """Mask a single credential value.  Non-string or short values are passed through."""
+    if isinstance(value, str) and len(value) > 8:
+        return "****" + value[-4:]
+    if isinstance(value, dict):
+        return _mask_api_keys(value)
+    return value
+
+
 def _mask_if_key(field_name: str, value: Any) -> Any:
+    """Legacy helper kept for any callers outside this module."""
     name_lower = field_name.lower()
     if ("key" in name_lower or "secret" in name_lower or "token" in name_lower):
-        if isinstance(value, str) and len(value) > 8:
-            return "****" + value[-4:]
+        return _mask_credential(value)
     if isinstance(value, dict):
         return _mask_api_keys(value)
     return value
