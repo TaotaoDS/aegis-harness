@@ -1,8 +1,8 @@
 # AegisHarness
 
-**v0.1.0** · Production-grade AI Agent Harness — deterministic auth, multi-tenancy, semantic memory, and MCP tool management for LLM workflows.
+**v0.2.0** · Production-grade AI Agent Harness — deterministic auth, multi-tenancy, semantic knowledge graph, generative UI, and MCP tool management for LLM workflows.
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/) [![Next.js 15](https://img.shields.io/badge/next.js-15-black)](https://nextjs.org/) [![PostgreSQL 16](https://img.shields.io/badge/postgresql-16-336791)](https://www.postgresql.org/) [![Tests 598](https://img.shields.io/badge/tests-598%20passing-brightgreen)]() [![License MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/) [![Next.js 15](https://img.shields.io/badge/next.js-15-black)](https://nextjs.org/) [![PostgreSQL 16](https://img.shields.io/badge/postgresql-16-336791)](https://www.postgresql.org/) [![Tests 598+](https://img.shields.io/badge/tests-598%2B%20passing-brightgreen)]() [![License MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [English](./README.md) | [中文](./README.zh-CN.md)
 
@@ -21,9 +21,11 @@ Think of it as the harness around a racecar engine: the engine (LLM) is powerful
 | What bare LLMs lack | What AegisHarness provides |
 |---|---|
 | No identity | JWT multi-tenancy — every request is scoped to a verified user and an isolated tenant |
-| No memory | Semantic vector search over past solutions — agents learn from prior runs, not just the current context window |
+| No memory | Semantic knowledge graph + vector search — agents learn from prior runs and ingested documents |
 | No tools | Hot-pluggable MCP tool manager — agents call external services without a restart |
 | No fault tolerance | 3-layer fault-recovery loop — a single model failure never kills an entire pipeline |
+| No human oversight | HITL approval gates — sensitive writes and escalations pause for human confirmation |
+| No session continuity | PostgreSQL-backed chat history — conversations persist and resume across page reloads |
 
 The result is a **deterministic harness around a non-deterministic core**: you own the workflow; the LLM writes the code.
 
@@ -33,61 +35,92 @@ The result is a **deterministic harness around a non-deterministic core**: you o
 
 ### 1. Enterprise-grade Multi-tenancy & Auth
 
-Every resource — jobs, solutions, settings, MCP servers — is scoped to a `tenant_id`. Sprints A–D (v0.1.0) delivered a complete JWT auth stack with full row-level isolation.
+Every resource — jobs, solutions, settings, MCP servers, knowledge nodes — is scoped to a `tenant_id`. The auth stack delivers complete JWT authentication with full row-level isolation.
 
 | Capability | Detail |
 |---|---|
 | Token design | HS256 JWT access token (15 min TTL) + opaque UUID refresh token (7 days, stored as bcrypt hash) |
 | Cookie transport | `aegis_access` + `aegis_refresh` — both `httpOnly`, CSRF-safe |
-| Roles | `owner` / `admin` / `member` with route-level guards (`require_admin`, `require_owner`) |
+| Roles | `super_admin` / `owner` / `admin` / `member` with route-level guards |
 | Row-level isolation | All tables carry `tenant_id`; settings PK is `(tenant_id, key)` — each tenant gets independent config |
 | Invite flow | Owner generates single-use invite tokens; recipients self-register into the same tenant |
-| Backward compat | Pre-auth rows backfilled to `BOOTSTRAP_TENANT_ID` — zero data migration required |
+| Transparent 401 recovery | Next.js proxy auto-refreshes expired tokens and retries the original request — frontend never sees 401 |
+| Session expired modal | If refresh also fails, a non-disruptive login overlay appears without clearing UI state |
 | API key encryption | Fernet symmetric encryption at rest; UI shows last 4 chars only |
 | **DEV_MODE** | When `SECRET_KEY` is **unset**, auth is fully bypassed. The backend returns a synthetic `dev@localhost` owner and the frontend never redirects to `/login`. Full feature evaluation with zero credentials. |
 
-### 2. BYOM — Bring Your Own Model (17 Providers)
+### 2. BYOM — Bring Your Own Model (18+ Providers)
 
 Every LLM call goes through a YAML-configured `ModelRouter`. Switching models requires one line in `models_config.yaml` — no code change, no restart.
 
-All providers share a single, pure-`urllib` connector. No additional provider SDK is needed beyond the two first-party ones (`openai`, `anthropic`) already in `requirements.txt`.
+All providers share a single, pure-`urllib` connector. No additional provider SDK is needed beyond the two first-party ones (`openai`, `anthropic`).
 
-**Global (7)**
+**Unified Gateway**
 
 | Provider | Notes |
 |---|---|
-| Anthropic | Claude Sonnet, Claude Opus |
+| **OpenRouter** ⭐ | One key → 300+ models (Claude / GPT / Gemini / Llama / DeepSeek, etc.) — recommended starting point |
+
+**Global Providers**
+
+| Provider | Notes |
+|---|---|
+| Anthropic | Claude Sonnet 4, Claude Opus 4 |
 | OpenAI | GPT-4o and any OpenAI-compatible endpoint |
-| Google Gemini | via OpenAI-compatible proxy |
-| Mistral AI | via OpenAI-compatible endpoint |
-| Groq | via OpenAI-compatible endpoint |
-| xAI (Grok) | via OpenAI-compatible endpoint |
-| Together AI | via OpenAI-compatible endpoint |
+| Google Gemini | Gemini 2.0 Flash, Gemini Pro 1.5 |
+| Mistral AI | mistral-large-2411 |
+| Groq | llama-3.3-70b-versatile (ultra-fast inference) |
+| xAI (Grok) | grok-2-latest |
+| Together AI | Meta Llama and other open models |
+| NVIDIA NIM | 200+ open-source models; free tier 1,000 calls |
 
-**China Ecosystem (8)**
+**China Ecosystem**
 
 | Provider | Notes |
 |---|---|
-| DeepSeek | V3 / R1 reasoning |
-| Alibaba Qwen | Qwen-Long / Qwen-Max |
+| DeepSeek | V3 / R1 reasoning; very cost-effective |
+| Alibaba Qwen | Qwen 2.5 72B and Qwen-Max series |
 | Zhipu GLM | GLM-5, GLM-5-Turbo, GLM-4.7 |
-| Moonshot / Kimi | 8k / 128k context |
-| Baidu ERNIE | via OpenAI-compatible proxy |
-| MiniMax | via OpenAI-compatible endpoint |
-| Yi (01.AI) | via OpenAI-compatible endpoint |
-| Doubao (ByteDance) | via OpenAI-compatible endpoint |
+| Moonshot / Kimi | 8k / 128k long-context |
+| Baidu ERNIE | ERNIE 4.5 |
+| MiniMax | abab6.5s-chat |
+| 01.AI (Yi) | yi-large |
+| ByteDance Doubao | doubao-pro-32k |
 
-**Local / Offline (3)**
+**Local / Offline**
 
 | Provider | Notes |
 |---|---|
-| **Ollama** | Fully offline; embedding backend also uses `urllib` only — zero network dependency |
+| **Ollama** | Fully offline; embedding client also uses `urllib` only — zero network dependency |
 | **vLLM** | Self-hosted OpenAI-compatible server |
 | Any OpenAI-compatible | Point `base_url` to any server in `models_config.yaml` |
 
-For local providers, no API key is required — only the endpoint URL and model identifier.
+Keys saved through the Settings UI are automatically bridged into the model router via `key_injector.py` — no restart required.
 
-### 3. Concurrent Task Scheduling & 3-Layer Fault Recovery
+### 3. AI Workspace — Knowledge Graph + Generative Chat
+
+The **AI Workspace** (`/knowledge`) is the primary user interface, combining a knowledge graph, document ingestion, and a powerful generative chat assistant.
+
+**Knowledge Graph**
+- Upload PDFs, TXT files, or crawl URLs — each document becomes a graph node
+- LLM extracts 5–10 key concepts per document, creating concept nodes linked to the source
+- Auto-linking: semantic similarity search creates `related_concept` and `semantically_related` edges between nodes across documents
+- Interactive D3.js graph: pan, zoom, click nodes to set chat context
+
+**Generative Chat (WorkspaceChat)**
+- Dual-pane layout: knowledge graph on the left, chat on the right (resizable divider)
+- Type `/task <requirement>` to launch a full multi-agent pipeline inline
+- Task progress renders as a live **TaskCard** with SSE event stream
+- Interactive cards appear inline: CEO interview questions and HITL approval requests render directly in the chat — no page navigation required
+- Answered/approved cards lock to a read-only state; the conversation history is preserved
+
+**Chat Session Persistence**
+- All conversations are stored in PostgreSQL (`chat_sessions` + `chat_messages` tables)
+- Session resumes across page reloads — scroll position and message history are restored
+- **History Drawer**: slide-in panel listing recent sessions; click any session to restore it
+- New session button resets the chat while preserving the knowledge context
+
+### 4. Concurrent Task Scheduling & 3-Layer Fault Recovery
 
 The orchestrator decomposes each project into a task graph and executes independent tasks in parallel waves.
 
@@ -109,9 +142,24 @@ Task dependency graph  →  wave_schedule()  →  [ [A], [B, C], [D] ]
 | **2 — Model Escalation** | Second consecutive failure | Switch to a higher-tier `escalated_tool_llm` |
 | **3 — Human Gate** | Third failure **or** token budget ≥ 80% | Write escalation report to workspace; pause for HITL approval |
 
-All LLM calls additionally wrap a `tenacity` exponential back-off retry (1 s → 60 s, 4 attempts). When `tenacity` is not installed the call executes once with no retry and no import error — zero blast radius.
+All LLM calls additionally wrap a `tenacity` exponential back-off retry (1 s → 60 s, 4 attempts). When `tenacity` is not installed the call executes once with no retry — zero import error.
 
-### 4. Dynamic MCP Tool Manager
+### 5. Human-in-the-Loop (HITL) Approval
+
+Sensitive operations require explicit human approval before proceeding.
+
+**Triggers**
+- Writing to sensitive files (auth, config, `.env`, secrets)
+- Update Mode modifying existing project code
+- ResilienceManager escalation after max retries
+
+**Flow**
+1. Agent emits `hitl.approval_required` SSE event with action details and risk level
+2. Inline `InlineApprovalCard` appears in WorkspaceChat — no page navigation required
+3. Admin reviews the file list, optional note, then approves or rejects
+4. Card locks to a read-only responded state; pipeline continues (approved) or cancels (rejected)
+
+### 6. Dynamic MCP Tool Manager
 
 MCP (Model Context Protocol) servers extend the agent with external tools — web search, code execution, database queries, and more.
 
@@ -134,67 +182,83 @@ curl -X POST http://localhost:8000/mcp/servers/{id}/probe
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Browser  (Next.js 15 · App Router · Tailwind CSS)              │
-│                                                                  │
-│  Shell.tsx ──► route guard (useAuth)                            │
-│  /chat     ──► SSE event stream ──► MessageBubble / Timeline    │
-│  /settings ──► APIKeysTab · ModelsTab · MCPTab · ProfileTab     │
-│  /login /register /invite/[token]   (public routes)             │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │  HTTPS + httpOnly cookies
-                            │  /api/proxy/** (cookie-forwarding reverse proxy)
-┌───────────────────────────▼─────────────────────────────────────┐
-│  FastAPI  (Uvicorn · 2 workers · async)                         │
-│                                                                  │
-│  /auth        register · login · refresh · invite · me          │
-│  /jobs        create · list · detail · cancel                   │
-│  /jobs/{id}/stream   SSE stream (keepalive every 15 s)          │
-│  /approvals          HITL gate (approve / reject)               │
-│  /settings           API keys · model config (per-tenant)       │
-│  /mcp                server CRUD + probe                        │
-│                                                                  │
-│  Lifespan: init_db() · _recover_jobs_from_db() · close_db()    │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────────────┐
-│  Core Orchestrator  (pure Python · no framework)                │
-│                                                                  │
-│  CEOAgent          (≥95% confidence clarifying interview)       │
-│    └─► ArchitectAgent  (tool-use code generation)               │
-│          └─► Evaluator     (ast · pyflakes · subprocess)        │
-│                └─► QAAgent     (code review)                    │
-│                      └─► ReflectionAgent (lesson extraction)    │
-│                                                                  │
-│  ModelRouter       (YAML routing · 30 s cache · ${VAR} interp.) │
-│  LLMConnector      (OpenAI / Anthropic adapters · urllib)       │
-│  ParallelExecutor  (Kahn BFS waves · ThreadPoolExecutor)        │
-│  ResilienceManager (3-layer escalation · token budget guard)    │
-│  MCPManager        (hot-plug · per-tenant · urllib probe)       │
-│  VectorStore       (pgvector upsert · Python cosine fallback)   │
-│  SolutionStore     (YAML lessons · workspace-scoped)            │
-│  PIISanitizer      (composable redaction pipeline)              │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │  asyncpg · SQLAlchemy 2.0 async
-┌───────────────────────────▼─────────────────────────────────────┐
-│  PostgreSQL 16 + pgvector                                       │
-│                                                                  │
-│  tenants · users · refresh_tokens · workspaces                  │
-│  jobs · job_events · checkpoints                                │
-│  solutions  (embedding JSONB 1536-dim, ready for pgvector v2)   │
-│  settings   PK: (tenant_id, key)                                │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  Browser  (Next.js 15 · App Router · Tailwind CSS)                  │
+│                                                                      │
+│  /knowledge  ──► KnowledgeGraph · WorkspaceChat · TaskCard          │
+│                  InlineInterviewCard · InlineApprovalCard            │
+│                  HistoryDrawer (session restore)                     │
+│  /dashboard  ──► job history                                         │
+│  /settings   ──► APIKeysTab · ModelsTab · MCPTab · ProfileTab        │
+│  /console    ──► SystemStatusCards · TenantStatsPanel · TrendChart  │
+│  /login /register /invite/[token] /pending   (auth routes)          │
+│                                                                      │
+│  SessionExpiredModal  (overlays on 401 without clearing state)       │
+└───────────────────────┬─────────────────────────────────────────────┘
+                        │  HTTPS + httpOnly cookies
+                        │  /api/proxy/** (401→refresh→retry proxy)
+┌──────────────────��────▼─────────────────────────────────────────────┐
+│  FastAPI  (Uvicorn · async)                                          │
+│                                                                      │
+│  /auth          register · login · refresh · invite · me            │
+│  /jobs          create · list · detail · cancel                      │
+│  /jobs/{id}/stream   SSE stream (keepalive every 15 s)              │
+│  /knowledge     chat · sessions · search · upload · ingest · graph  │
+│  /approvals     HITL gate (approve / reject)                         │
+│  /interview     CEO interview answer submission                      │
+│  /settings      API keys · model config · CEO config (per-tenant)   │
+│  /mcp           server CRUD + probe                                  │
+│  /console       stats · trends (admin only)                          │
+│                                                                      │
+│  key_injector.py — bridges DB api_keys → os.environ at runtime      │
+└───────────────────────┬─────────────────────────────────────────────┘
+                        │
+┌───────────────────────▼─────────────────────────────────────────────┐
+│  Core Orchestrator  (pure Python · no framework)                     │
+│                                                                      │
+│  CEOAgent          (≥95% confidence clarifying interview)            │
+│    └─► ArchitectAgent  (tool-use code generation)                    │
+│          └─► Evaluator     (ast · pyflakes · subprocess sandbox)    │
+│                └─► QAAgent     (code review)                         │
+│                      └─► ReflectionAgent (lesson extraction)         │
+│                                                                      │
+│  ModelRouter       (YAML routing · 30 s cache · ${VAR} interpolation)│
+│  LLMConnector      (OpenAI / Anthropic adapter protocol · urllib)   │
+│  ParallelExecutor  (Kahn BFS waves · ThreadPoolExecutor)            │
+│  ResilienceManager (3-layer escalation · token budget guard)        │
+│  HITLManager       (sensitive file gate · update-mode gate)         │
+│  MCPManager        (hot-plug · per-tenant · urllib probe)           │
+│  KnowledgeIngestion(PDF/URL → Markdown → concepts → graph → embed) │
+│  VectorStore       (pgvector upsert · Python cosine fallback)       │
+│  SolutionStore     (YAML lesson library · workspace-scoped)         │
+│  PIISanitizer      (composable redaction pipeline)                  │
+└───────────────────────┬─────────────────────────────────────────────┘
+                        │  asyncpg · SQLAlchemy 2.0 async
+┌───────────────────────▼─────────────────────────────────────────────┐
+│  PostgreSQL 16 + pgvector                                            │
+│                                                                      │
+│  tenants · users · refresh_tokens · workspaces                      │
+│  jobs · job_events · checkpoints                                     │
+│  solutions  (embedding 1536-dim via pgvector)                       │
+│  knowledge_nodes · knowledge_edges  (graph tables)                  │
+│  chat_sessions · chat_messages  (session persistence)               │
+│  settings   PK: (tenant_id, key)                                     │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Request flow (happy path)**
+**Request flow — AI Workspace chat with `/task`**
 
-1. Browser sends `POST /api/proxy/jobs` with the `aegis_access` cookie.
-2. Next.js proxy forwards to FastAPI; `get_current_user` validates JWT and resolves `tenant_id`.
-3. CEOAgent conducts a structured requirements interview until ≥ 95% confidence.
-4. Architect decomposes work into a dependency graph; `wave_schedule` computes parallel waves.
-5. Each wave runs concurrently; Evaluator + QA gate each task; ResilienceManager handles failures.
-6. ReflectionAgent extracts lessons into SolutionStore; semantic embeddings upserted to pgvector.
-7. The SSE stream delivers real-time events to the browser throughout.
+1. User types `/task build <requirement>` in WorkspaceChat.
+2. `callChat` sends `POST /knowledge/chat` with the current `session_id` (or null for new session).
+3. Backend auto-creates or resumes the session; persists the user message.
+4. A background `job_runner` thread starts the pipeline; a TaskCard is injected into the chat.
+5. CEOAgent conducts a structured interview; each question emits `ceo.question` via SSE.
+6. An `InlineInterviewCard` appears in the chat stream; user answers inline.
+7. Architect decomposes work; `wave_schedule` computes parallel waves of tasks.
+8. Each task runs concurrently; Evaluator + QA gate each output; ResilienceManager handles failures.
+9. If a sensitive file write is required, an `InlineApprovalCard` appears for HITL confirmation.
+10. ReflectionAgent extracts lessons; embeddings upserted to pgvector.
+11. On completion a pipeline summary appears inline; the full session is persisted to DB.
 
 For the full design reference see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
@@ -229,7 +293,8 @@ docker compose up --build
 > every request, and the frontend never redirects to `/login`.
 >
 > The complete feature set — multi-tenant settings, MCP tools, the full orchestrator
-> pipeline, and semantic memory — is available without any API keys or credentials.
+> pipeline, knowledge graph, and semantic memory — is available without any API keys
+> or credentials.
 >
 > To activate production auth, add:
 > ```bash
@@ -246,7 +311,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env            # set DATABASE_URL + any API keys
-alembic upgrade head            # run all 5 schema migrations
+alembic upgrade head            # run all 11 schema migrations
 
 uvicorn api.main:app --reload --port 8000
 
@@ -275,39 +340,51 @@ python main.py --workspace <id> --reset            # clear checkpoint, re-run fr
 
 Keys can be set in three equivalent ways (precedence: DB settings > `.env` > system env):
 
-1. **Settings UI** → API Keys tab — values masked on read (last 4 chars only).
-2. **`.env` file** — loaded at startup.
+1. **Settings UI** → API Keys tab — values are masked on read (last 4 chars only).
+2. **`.env` file** — loaded at startup via `load_dotenv`.
 3. **System environment variables** — useful for Docker and CI pipelines.
 
 | Variable | Provider |
 |---|---|
+| `OPENROUTER_API_KEY` | OpenRouter (1 key → 300+ models) ⭐ recommended |
 | `ANTHROPIC_API_KEY` | Anthropic Claude |
 | `OPENAI_API_KEY` | OpenAI GPT |
 | `NVIDIA_API_KEY` + `NVIDIA_BASE_URL` | NVIDIA NIM |
 | `DEEPSEEK_API_KEY` + `DEEPSEEK_BASE_URL` | DeepSeek V3 / R1 |
 | `ZHIPU_API_KEY` + `ZHIPU_BASE_URL` | Zhipu GLM |
 | `MOONSHOT_API_KEY` + `MOONSHOT_BASE_URL` | Moonshot / Kimi |
+| `BRAVE_SEARCH_API_KEY` | Brave Search (web search; free tier 2,000 req/mo) |
 
 > All keys are stored encrypted (Fernet) in the database when saved through the UI.
-> They are never sent to any third-party server.
+> They are injected into `os.environ` at request time by `api/key_injector.py` so
+> the model router always uses the latest saved values without a restart.
 
 ### Model Routing (`models_config.yaml`)
 
 ```yaml
 models:
-  my-model:
-    provider: openai               # "openai" handles all OpenAI-compatible APIs
-    model_name: gpt-4o
-    api_key_env: OPENAI_API_KEY    # env var name, or inline ${VAR} interpolation
-    base_url: null                 # null = use provider default
+  openrouter-claude-sonnet:
+    provider: openai                              # OpenRouter uses the OpenAI protocol
+    model_id: anthropic/claude-sonnet-4
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
     max_tokens: 8192
-    temperature: 0.2
+    temperature: 0.7
+    tier: standard
+
+  my-local-model:
+    provider: openai
+    model_id: llama3                              # model name registered in Ollama
+    api_key_env: LOCAL_API_KEY                    # any non-empty value for Ollama
+    base_url_env: LOCAL_BASE_URL                  # http://localhost:11434/v1
+    max_tokens: 8192
+    temperature: 0.7
 
 routes:
-  - match: { role: architect }
-    model: my-model
-  - match: {}                      # catch-all default
-    model: my-model
+  - match: {}                                     # catch-all; first model with a valid key wins
+    model: openrouter-claude-sonnet
+  - match: {}
+    model: my-local-model
 
 execution:
   max_retries: 3          # Architect retry limit per task
@@ -351,7 +428,7 @@ Set `embedding.provider: ollama` in `models_config.yaml` and point all model rou
 
 ```
 enterprise-harness/
-├── core_orchestrator/         # Pure Python business logic (22 modules · 48 test files)
+├── core_orchestrator/         # Pure Python business logic
 │   ├── ceo_agent.py           # Clarifying interview (≥95% confidence threshold)
 │   ├── architect_agent.py     # Code generation via tool-use LLM
 │   ├── qa_agent.py            # Code review agent
@@ -360,48 +437,100 @@ enterprise-harness/
 │   ├── ce_orchestrator.py     # Pipeline coordinator (CEO→Architect→QA→Reflect)
 │   ├── resilience_manager.py  # 3-layer escalation + token budget circuit breaker
 │   ├── parallel_executor.py   # Kahn BFS wave scheduler + ThreadPoolExecutor
-│   ├── retry_utils.py         # Exponential backoff (tenacity optional, degrades gracefully)
+│   ├── retry_utils.py         # Exponential backoff (tenacity optional)
 │   ├── model_router.py        # YAML-driven multi-provider routing (30 s TTL cache)
 │   ├── llm_connector.py       # OpenAI / Anthropic adapter protocol + registry
+│   ├── llm_gateway.py         # Translation gateway (auto-detects language)
 │   ├── mcp_manager.py         # Hot-plug MCP server registry (urllib probe)
+│   ├── knowledge_ingestion.py # PDF/URL → Markdown → concepts → graph → embeddings
+│   ├── knowledge_manager.py   # Knowledge graph CRUD + semantic search
 │   ├── vector_store.py        # pgvector upsert + Python cosine similarity fallback
 │   ├── solution_store.py      # YAML lesson library (workspace-scoped)
-│   ├── pii_sanitizer.py       # Composable PII redaction pipeline (30 tests)
-│   └── tests/                 # 598 pytest tests across all modules
+│   ├── pii_sanitizer.py       # Composable PII redaction pipeline
+│   ├── web_browser.py         # Headless web page fetch + content extraction
+│   ├── web_crawler.py         # URL → Markdown via markdownify
+│   └── tests/                 # 598+ pytest tests across all modules
 │
-├── api/                       # FastAPI application (8 modules)
+├── api/                       # FastAPI application
 │   ├── main.py                # App factory · lifespan hooks · CORS · crash recovery
 │   ├── auth.py                # JWT creation/validation · DEV_MODE logic
 │   ├── deps.py                # FastAPI Depends: CurrentUser · require_admin · require_owner
-│   └── routes/                # auth · jobs · stream · approvals · interview · settings · mcp
+│   ├── job_runner.py          # Background pipeline thread (DB key injection + orchestrator)
+│   ├── job_store.py           # In-memory job state + DB persistence bridge
+│   ├── event_labels.py        # Human-readable SSE event label map (English)
+│   ├── event_bridge.py        # SSE event routing (job → connected clients)
+│   ├── hitl_manager.py        # HITL gate: sensitive file + update-mode approval
+│   ├── interview_manager.py   # CEO interview answer bridge (agent ↔ API)
+│   ├── key_injector.py        # DB api_keys → os.environ bridge (no restart needed)
+│   ├── settings_service.py    # Settings CRUD (PostgreSQL backed)
+│   └── routes/                # auth · jobs · stream · approvals · interview
+│                              # knowledge · settings · mcp · console · setup · admin
 │
 ├── db/                        # Database layer
-│   ├── models.py              # SQLAlchemy ORM (10 tables incl. auth + workspace)
-│   ├── repository.py          # Async CRUD (15 k LOC)
-│   ├── connection.py          # asyncpg engine · session factory
-│   └── migrations/            # Alembic revisions 001–005
+│   ├── models.py              # SQLAlchemy ORM (12 tables)
+│   ├── repository.py          # Async CRUD — all functions accept AsyncSession
+│   ├── connection.py          # asyncpg engine · session factory · URL normalisation
+│   └── migrations/            # Alembic revisions 001–011
 │       ├── 001_initial_schema.py
 │       ├── 002_add_embedding_column.py
 │       ├── 003_add_auth_tables.py
 │       ├── 004_add_workspaces.py
-│       └── 005_tenant_scope_existing_tables.py
+│       ├── 005_tenant_scope_existing_tables.py
+│       ├── 006_tenant_quotas.py
+│       ├── 007_billing_tables.py
+│       ├── 008_superadmin_setup.py
+│       ├── 009_graph_tables.py
+│       ├── 010_resize_embedding_vector.py
+│       └── 011_chat_sessions.py
 │
 ├── web/                       # Next.js 15 frontend
-│   ├── app/                   # App Router: dashboard · chat · jobs · settings · auth · onboarding
-│   ├── components/            # Shell · Sidebar · MessageBubble · InterviewPanel · Timeline
-│   ├── lib/auth/              # AuthProvider · useAuth() · token refresh
-│   ├── lib/i18n/              # useT() hook · en.ts · zh.ts (18 localized components)
-│   └── hooks/                 # useEventStream (SSE · auto-reconnect · dedup)
+│   ├── app/
+│   │   ├── knowledge/         # AI Workspace (primary interface)
+│   │   │   ├── page.tsx       # Resizable dual-pane layout
+│   │   │   └── components/
+│   │   │       ├── WorkspaceChat.tsx     # Generative chat + task dispatch
+│   │   │       ├── KnowledgeGraph.tsx    # D3.js interactive graph
+│   │   │       ├── TaskCard.tsx          # Live pipeline progress (SSE)
+│   │   │       ├── InlineInterviewCard.tsx  # CEO question card (inline)
+│   │   │       ├── InlineApprovalCard.tsx   # HITL approval card (inline)
+│   │   │       ├── HistoryDrawer.tsx     # Session history + restore
+│   │   │       ├── KnowledgeChat.tsx     # Graph-grounded Q&A chat
+│   │   │       └── UploadPanel.tsx       # Drag-and-drop ingestion
+│   │   ├── dashboard/         # Job history list
+│   │   ├── jobs/[id]/         # Job detail + approval actions
+│   │   ├── settings/          # APIKeysTab · ModelsTab · MCPTab · CEOTab · ProfileTab
+│   │   ├── console/           # Admin dashboard (stats · trends · tenant list)
+│   │   ├── admin/             # User approval (super_admin only)
+│   │   └── onboarding/        # First-run setup wizard
+│   ├── components/
+│   │   ├── Shell.tsx          # Auth-gated layout wrapper
+│   │   ├── Sidebar.tsx        # Navigation + workspace switcher + theme toggle
+│   │   ├── SessionExpiredModal.tsx  # Re-login overlay (no state loss)
+│   │   ├── ApprovalModal.tsx  # Full-page HITL approval (jobs/[id] route)
+│   │   ├── InterviewPanel.tsx # Full-page CEO interview (jobs/[id] route)
+│   │   ├── Timeline.tsx       # SSE event log timeline
+│   │   └── generative/        # EventCard · FileCard · QAVerdict
+│   ├── lib/
+│   │   ├── auth/
+│   │   │   ├── context.tsx    # AuthProvider + session-expired event listener
+│   │   │   ├── client.ts      # API client (login · logout · register · refresh)
+│   │   │   └── sessionGuard.ts  # window.fetch monkey-patch → aegis:session-expired events
+│   │   ├── i18n/              # useT() hook · en.ts · zh.ts (dual-language UI)
+│   │   ├── eventLabels.ts     # Frontend SSE event label map + event sets
+│   │   └── theme/             # Dark/light theme context
+│   └── hooks/
+│       └── useApproval.ts     # HITL approval polling hook
 │
 ├── workspaces/                # Generated code artifacts (volume-mounted · git-ignored)
-├── knowledge_base/            # Curated lesson library (pre-trained)
-├── models_config.yaml         # LLM routing configuration
+├── knowledge_base/            # Curated lesson library (pre-seeded)
+├── models_config.yaml         # LLM routing configuration (18+ providers pre-configured)
 ├── docker-compose.yml         # Production stack (postgres · backend · frontend)
 ├── docker-compose.override.yml # Local dev overrides (hot-reload)
-├── Dockerfile                 # Backend multi-stage image (non-root user harness uid 1000)
-├── .env.example               # Environment variable template
+├── Dockerfile                 # Backend multi-stage image (non-root uid 1000)
+├── .env.example               # Environment variable template with all providers
 ├── ARCHITECTURE.md            # Full system design reference
-└── AGENTS.md                  # Agent operating manual
+├── AGENTS.md                  # Agent operating manual
+└── CHANGELOG.md               # Version history
 ```
 
 ---
@@ -411,7 +540,7 @@ enterprise-harness/
 ### Running Tests
 
 ```bash
-pytest                           # all 598 tests
+pytest                           # all tests
 pytest core_orchestrator/tests/  # orchestrator unit tests only
 pytest -k test_resilience        # filter by name
 pytest --cov=core_orchestrator --cov-report=term-missing  # coverage report
@@ -420,7 +549,7 @@ pytest --cov=core_orchestrator --cov-report=term-missing  # coverage report
 ### Database Migrations
 
 ```bash
-alembic upgrade head                                  # apply all pending migrations
+alembic upgrade head                                  # apply all pending migrations (001–011)
 alembic revision --autogenerate -m "describe change"  # generate a new revision
 alembic downgrade -1                                  # roll back one revision
 alembic current                                       # show current revision
@@ -430,18 +559,25 @@ alembic current                                       # show current revision
 
 1. Add an entry under `models:` in `models_config.yaml` with `provider: openai`. All OpenAI-compatible APIs work without any code changes.
 2. If the provider requires a non-standard auth scheme, implement `LLMConnector` in `core_orchestrator/llm_connector.py` and register it with `register_connector("my-provider", MyConnector())`.
-3. Add the API key env var to `.env.example` and the onboarding provider catalogue (`web/app/onboarding/providers.ts`).
+3. Add the API key env var name to `.env.example`, the `_DB_KEY_TO_ENV` mapping in `api/key_injector.py`, and the onboarding provider catalogue (`web/app/onboarding/providers.ts`).
 
 ### SSE Event Reference
 
-| Event | Key Payload Fields | Description |
+| Event type | Key payload fields | Description |
 |---|---|---|
 | `pipeline.start` | `job_id` | Pipeline begins |
-| `agent.thinking` | `agent`, `message` | Agent producing output |
-| `task.complete` | `task_id`, `output` | Single task finished |
-| `hitl.required` | `task_id`, `reason` | Human approval gate triggered |
-| `pipeline.complete` | `artifacts` | All tasks done; files available |
+| `ceo.interviewing` | — | CEO clarifying requirements |
+| `ceo.question` | `question` | CEO asks user a question (triggers InlineInterviewCard) |
+| `ceo.plan_created` | `task_count` | Development plan ready |
+| `architect.solving` | `task_id` | Architect writing code for a task |
+| `architect.file_written` | `filepath` | File committed to workspace |
+| `hitl.approval_required` | `reason`, `files`, `risk` | Human approval needed (triggers InlineApprovalCard) |
+| `hitl.approved` / `hitl.rejected` | `note` | HITL decision received |
+| `evaluator.pass` / `evaluator.fail` | — | Sandbox validation result |
+| `qa.pass` / `qa.fail` | — | Code review result |
+| `pipeline.complete` | `artifacts` | All tasks finished |
 | `pipeline.error` | `error` | Unrecoverable failure |
+| `pipeline.rejected` | — | User cancelled |
 
 ---
 
@@ -449,7 +585,7 @@ alembic current                                       # show current revision
 
 **Zero blast radius** — every change must leave the system at least as functional as before.
 
-- **Test-first**: Add or update tests before touching production code. The 598-test suite is the regression gate; all tests must pass before any merge.
+- **Test-first**: Add or update tests before touching production code. The test suite is the regression gate; all tests must pass before any merge.
 - **Graceful degradation**: If you introduce an optional dependency, the system must work correctly when that dependency is absent. Use the `tenacity` and `pgvector` integrations as reference patterns.
 - **No global state**: All mutations are scoped to a workspace or tenant. Thread safety is assumed only within a single task's execution context.
 - **Preserve API contracts**: Backend route signatures and SSE event shapes are consumed by the frontend. Breaking changes require coordinated updates to both layers.

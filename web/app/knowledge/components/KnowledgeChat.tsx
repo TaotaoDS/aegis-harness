@@ -73,7 +73,7 @@ async function searchNodes(query: string, limit = 5): Promise<SearchHit[]> {
 
 export function KnowledgeChat({ selectedNode, contextNodeIds, contextTitles, onAutoContext }: Props) {
   const [messages, setMessages] = useState<Message[]>([
-    mkMsg("assistant", "你好！请在左侧图谱中选择一个节点，我将基于该节点及其关联内容来回答你的问题。也可以直接提问，我会自动匹配相关节点。"),
+    mkMsg("assistant", "Hello! Select a node in the graph on the left and I will answer questions based on that node and its related content. You can also ask directly — I will automatically match relevant nodes."),
   ]);
   const [input,   setInput]   = useState("");
   const [loading, setLoading] = useState(false);
@@ -89,7 +89,7 @@ export function KnowledgeChat({ selectedNode, contextNodeIds, contextTitles, onA
     if (!selectedNode) return;
     setMessages((prev) => [
       ...prev,
-      mkMsg("system", `🔗 上下文已切换为「${selectedNode.title}」及其 ${Math.max(0, contextNodeIds.length - 1)} 个关联节点`),
+      mkMsg("system", `🔗 Context switched to "${selectedNode.title}" and ${Math.max(0, contextNodeIds.length - 1)} related node(s)`),
     ]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedNode?.id]);
@@ -123,7 +123,7 @@ export function KnowledgeChat({ selectedNode, contextNodeIds, contextTitles, onA
           onAutoContext(activeIds, activeTitles);
           setMessages((prev) => [
             ...prev,
-            mkMsg("system", `🔍 自动匹配到 ${hits.length} 个相关节点：${activeTitles.slice(0, 3).join("、")}${hits.length > 3 ? "…" : ""}`),
+            mkMsg("system", `🔍 Auto-matched ${hits.length} relevant node(s): ${activeTitles.slice(0, 3).join(", ")}${hits.length > 3 ? "…" : ""}`),
           ]);
         }
       } catch {
@@ -137,7 +137,7 @@ export function KnowledgeChat({ selectedNode, contextNodeIds, contextTitles, onA
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        mkMsg("system", `⚠️ 请求失败：${err}`),
+        mkMsg("system", `⚠️ Request failed: ${err}`),
       ]);
     } finally {
       setLoading(false);
@@ -165,9 +165,9 @@ export function KnowledgeChat({ selectedNode, contextNodeIds, contextTitles, onA
       <div className="px-4 py-3 border-b border-slate-700 shrink-0">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-white">知识问答</h2>
+            <h2 className="text-sm font-semibold text-white">Knowledge Q&amp;A</h2>
             <p className="text-[10px] text-slate-500 mt-0.5">
-              {hasContext ? "基于选中节点网络的 AI 对话" : "直接提问将自动匹配相关节点"}
+              {hasContext ? "AI chat grounded in the selected node network" : "Ask freely — relevant nodes will be matched automatically"}
             </p>
           </div>
           {contextTitles.length > 0 && (
@@ -256,8 +256,8 @@ export function KnowledgeChat({ selectedNode, contextNodeIds, contextTitles, onA
             rows={1}
             placeholder={
               hasContext
-                ? `基于「${contextTitles[0] ?? "…"}」提问…`
-                : "直接提问，系统将自动匹配相关节点…"
+                ? `Ask about "${contextTitles[0] ?? "…"}"…`
+                : "Ask anything — relevant nodes will be matched automatically…"
             }
             className="flex-1 bg-transparent text-sm text-slate-200 placeholder-slate-500
                        resize-none outline-none min-h-[28px] max-h-[140px] leading-relaxed
@@ -277,7 +277,7 @@ export function KnowledgeChat({ selectedNode, contextNodeIds, contextTitles, onA
           </button>
         </div>
         <p className="mt-1.5 text-[10px] text-slate-600 text-right">
-          Enter 发送 · Shift+Enter 换行
+          Enter to send · Shift+Enter for new line
         </p>
       </div>
     </div>

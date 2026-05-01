@@ -20,6 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import { getMe, login as apiLogin, logout as apiLogout } from "./client";
+import { installSessionGuard, uninstallSessionGuard, SESSION_EXPIRED_EVENT } from "./sessionGuard";
 import type { AuthUser } from "./client";
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,10 @@ interface AuthContextValue {
   logout: () => Promise<void>;
   /** Re-fetch the current user (e.g. after an invite accept) */
   refresh: () => Promise<void>;
+  /** true when the proxy detected an expired session (X-Auth-Expired: true) */
+  sessionExpired: boolean;
+  /** Call after successful re-login to dismiss the SessionExpiredModal */
+  clearSessionExpired: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -44,19 +49,28 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 // ---------------------------------------------------------------------------
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user,           setUser]           = useState<AuthUser | null>(null);
+  const [loading,        setLoading]        = useState(true);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   const refresh = useCallback(async () => {
     const me = await getMe();
     setUser(me);
   }, []);
 
-  // Hydrate on first mount
+  // Hydrate on first mount + install global fetch guard
   useEffect(() => {
     getMe()
       .then(setUser)
       .finally(() => setLoading(false));
+
+    installSessionGuard();
+    const handler = () => setSessionExpired(true);
+    window.addEventListener(SESSION_EXPIRED_EVENT, handler);
+    return () => {
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handler);
+      uninstallSessionGuard();
+    };
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
@@ -69,8 +83,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  const clearSessionExpired = useCallback(() => setSessionExpired(false), []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, refresh, sessionExpired, clearSessionExpired }}>
       {children}
     </AuthContext.Provider>
   );

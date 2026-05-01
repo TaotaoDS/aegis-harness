@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * WorkspaceChat — unified interaction panel for 智控空间 (AI Workspace).
+ * WorkspaceChat — unified interaction panel for the AI Workspace.
  *
  * Two modes in one input:
  *  - Plain text        → knowledge Q&A grounded in the selected graph context
@@ -16,13 +16,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GraphNode } from "./KnowledgeGraph";
 import { TaskCard, type JobType } from "./TaskCard";
+import { InlineInterviewCard } from "./InlineInterviewCard";
+import { InlineApprovalCard } from "./InlineApprovalCard";
+import { HistoryDrawer } from "./HistoryDrawer";
+import { EventCard } from "@/components/EventCard";
+import {
+  INTERVIEW_EVENTS,
+  INTERVIEW_DONE_EVENTS,
+  HITL_EVENTS,
+  RICH_EVENTS,
+  TERMINAL_EVENTS,
+} from "@/lib/eventLabels";
+import type { PendingApproval } from "@/hooks/useApproval";
 import { useT } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type Role = "user" | "assistant" | "system" | "task" | "web_results";
+type Role = "user" | "assistant" | "system" | "task" | "web_results"
+          | "interview" | "approval" | "rich_event";
 
 interface BaseMsg {
   id:      string;
@@ -48,7 +61,29 @@ interface WebResultsMsg extends BaseMsg {
   hits:    WebHit[];
 }
 
-type Message = BaseMsg | TaskMsg | WebResultsMsg;
+interface InterviewMsg extends BaseMsg {
+  role:      "interview";
+  jobId:     string;
+  question:  string;
+  answered?: string;
+  expired?:  boolean;
+}
+
+interface ApprovalMsg extends BaseMsg {
+  role:       "approval";
+  jobId:      string;
+  pending:    PendingApproval;
+  responded?: { approved: boolean; note: string };
+  expired?:   boolean;
+}
+
+interface RichEventMsg extends BaseMsg {
+  role:       "rich_event";
+  eventType:  string;
+  data:       Record<string, unknown>;
+}
+
+type Message = BaseMsg | TaskMsg | WebResultsMsg | InterviewMsg | ApprovalMsg | RichEventMsg;
 
 interface HistoryTurn { role: "user" | "assistant"; content: string }
 
@@ -63,6 +98,15 @@ const mkTask = (jobId: string, jobType: JobType, content: string): TaskMsg => ({
 });
 const mkWebResults = (query: string, hits: WebHit[]): WebResultsMsg => ({
   id: String(++_seq), role: "web_results", content: "", query, hits,
+});
+const mkInterview = (jobId: string, question: string): InterviewMsg => ({
+  id: String(++_seq), role: "interview", content: "", jobId, question,
+});
+const mkApproval = (jobId: string, pending: PendingApproval): ApprovalMsg => ({
+  id: String(++_seq), role: "approval", content: "", jobId, pending,
+});
+const mkRichEvent = (eventType: string, data: Record<string, unknown>): RichEventMsg => ({
+  id: String(++_seq), role: "rich_event", content: "", eventType, data,
 });
 
 // ---------------------------------------------------------------------------
@@ -84,18 +128,19 @@ async function callChat(
   message:        string,
   contextNodeIds: string[],
   history:        HistoryTurn[],
-): Promise<string> {
+  sessionId?:     string,
+): Promise<{ reply: string; session_id: string }> {
   const res = await fetch("/api/proxy/knowledge/chat", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify({ message, context_node_ids: contextNodeIds, history }),
+    body:    JSON.stringify({ message, context_node_ids: contextNodeIds, history, session_id: sessionId ?? null }),
   });
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));
     throw new Error((j as { detail?: string }).detail ?? `HTTP ${res.status}`);
   }
-  const data = await res.json() as { reply: string };
-  return data.reply;
+  const data = await res.json() as { reply: string; session_id?: string };
+  return { reply: data.reply, session_id: data.session_id ?? "" };
 }
 
 interface SearchHit { node_id: string; title: string; node_type: string; snippet: string }
@@ -213,15 +258,18 @@ export function WorkspaceChat({
   const [messages, setMessages] = useState<Message[]>([
     mkMsg("assistant", t.workspace.greeting),
   ]);
-  const [input,         setInput]         = useState("");
-  const [loading,       setLoading]       = useState(false);
-  const [webMode,       setWebMode]       = useState(false);
+  const [input,            setInput]            = useState("");
+  const [loading,          setLoading]          = useState(false);
+  const [webMode,          setWebMode]          = useState(false);
   // Map from hit URL → save state: undefined | "saving" | "saved" | error string
-  const [saveStates,    setSaveStates]    = useState<Record<string, string>>({});
+  const [saveStates,       setSaveStates]       = useState<Record<string, string>>({});
   // Web search key alert: null | "missing_key" | "quota"
-  const [webKeyAlert,   setWebKeyAlert]   = useState<"missing_key" | "quota" | null>(null);
-  const bottomRef                          = useRef<HTMLDivElement>(null);
-  const textareaRef                        = useRef<HTMLTextAreaElement>(null);
+  const [webKeyAlert,      setWebKeyAlert]      = useState<"missing_key" | "quota" | null>(null);
+  // Session persistence
+  const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
+  const [historyOpen,      setHistoryOpen]      = useState(false);
+  const bottomRef                                = useRef<HTMLDivElement>(null);
+  const textareaRef                              = useRef<HTMLTextAreaElement>(null);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -248,18 +296,66 @@ export function WorkspaceChat({
       .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
   }, [messages]);
 
-  // ── Main send handler ────────────────────────────────────────────────────
+  // ── Generative UI: forward events from TaskCard into chat messages ───────
 
-  const handleSend = useCallback(async () => {
-    const raw = input.trim();
-    if (!raw || loading) return;
+  const seenEventsRef = useRef<Set<string>>(new Set());
 
-    setInput("");
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
+  const handleTaskEvent = useCallback((jobId: string, type: string, data: Record<string, unknown>) => {
+    const dedupKey = `${type}::${data._timestamp ?? ""}`;
+    if (seenEventsRef.current.has(dedupKey)) return;
+    seenEventsRef.current.add(dedupKey);
 
+    if (INTERVIEW_EVENTS.has(type)) {
+      const question = (data.question as string) ?? "";
+      if (question) {
+        setMessages((prev) => [...prev, mkInterview(jobId, question)]);
+      }
+      return;
+    }
+
+    if (INTERVIEW_DONE_EVENTS.has(type)) {
+      setMessages((prev) => prev.map((m) =>
+        m.role === "interview" && !(m as InterviewMsg).answered && (m as InterviewMsg).jobId === jobId
+          ? { ...m, expired: true } as InterviewMsg
+          : m
+      ));
+      return;
+    }
+
+    if (HITL_EVENTS.has(type)) {
+      setMessages((prev) => [...prev, mkApproval(jobId, {
+        reason:          (data.reason as string) ?? "unknown",
+        description:     (data.description as string) ?? "",
+        files_to_modify: (data.files_to_modify as string[]) ?? undefined,
+        requirement:     (data.requirement as string) ?? undefined,
+        filepath:        (data.filepath as string) ?? undefined,
+      })]);
+      return;
+    }
+
+    if (TERMINAL_EVENTS.has(type)) {
+      setMessages((prev) => prev.map((m) => {
+        if (m.role === "interview" && !(m as InterviewMsg).answered && (m as InterviewMsg).jobId === jobId) {
+          return { ...m, expired: true } as InterviewMsg;
+        }
+        if (m.role === "approval" && !(m as ApprovalMsg).responded && (m as ApprovalMsg).jobId === jobId) {
+          return { ...m, expired: true } as ApprovalMsg;
+        }
+        return m;
+      }));
+    }
+
+    if (RICH_EVENTS.has(type)) {
+      setMessages((prev) => [...prev, mkRichEvent(type, data)]);
+    }
+  }, []);
+
+  // ── Core send logic (shared by normal send and edit-retry) ─────────────
+
+  const executeSend = useCallback(async (raw: string) => {
     const parsed = parseInput(raw);
 
-    // Always show the user's raw message
+    // Append the user's message
     setMessages((prev) => [...prev, mkMsg("user", raw)]);
 
     // ── Web search mode ─────────────────────────────────────────────────────
@@ -353,7 +449,8 @@ export function WorkspaceChat({
     }
 
     try {
-      const reply = await callChat(raw, activeIds, buildHistory());
+      const { reply, session_id } = await callChat(raw, activeIds, buildHistory(), currentSessionId);
+      if (session_id) setCurrentSessionId(session_id);
       setMessages((prev) => [...prev, mkMsg("assistant", reply)]);
     } catch (err) {
       setMessages((prev) => [
@@ -363,7 +460,53 @@ export function WorkspaceChat({
     } finally {
       setLoading(false);
     }
-  }, [input, loading, webMode, contextNodeIds, contextTitles, buildHistory, onAutoContext, t]);
+  }, [webMode, contextNodeIds, contextTitles, buildHistory, onAutoContext, t, currentSessionId]);
+
+  // ── Main send handler ────────────────────────────────────────────────────
+
+  const handleSend = useCallback(async () => {
+    const raw = input.trim();
+    if (!raw || loading) return;
+    setInput("");
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+    await executeSend(raw);
+  }, [input, loading, executeSend]);
+
+  // ── Edit & retry handler ─────────────────────────────────────────────────
+
+  const [editingId,      setEditingId]      = useState<string | null>(null);
+  const [editContent,    setEditContent]    = useState("");
+  const editTextareaRef                      = useRef<HTMLTextAreaElement>(null);
+
+  const startEdit = useCallback((msgId: string, content: string) => {
+    setEditingId(msgId);
+    setEditContent(content);
+    // Focus after render
+    setTimeout(() => editTextareaRef.current?.focus(), 0);
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditContent("");
+  }, []);
+
+  const submitEdit = useCallback(async (msgId: string) => {
+    const trimmed = editContent.trim();
+    if (!trimmed || loading) return;
+
+    // Truncate: keep only messages strictly before the edited one
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msgId);
+      return idx >= 0 ? prev.slice(0, idx) : prev;
+    });
+
+    setEditingId(null);
+    setEditContent("");
+    // Reset dedup set so re-triggered task events aren't silently dropped
+    seenEventsRef.current.clear();
+
+    await executeSend(trimmed);
+  }, [editContent, loading, executeSend]);
 
   // ── Input event handlers ─────────────────────────────────────────────────
 
@@ -387,6 +530,33 @@ export function WorkspaceChat({
   const isTaskMode   = input.trimStart().startsWith("/task");
   const canSend      = !loading && input.trim().length > 0;
 
+  // ── Session history handlers ─────────────────────────────────────────────
+
+  const handleNewSession = useCallback(() => {
+    setCurrentSessionId(undefined);
+    seenEventsRef.current.clear();
+    setMessages([mkMsg("assistant", t.workspace.greeting)]);
+  }, [t]);
+
+  interface SessionDetail {
+    id: string;
+    title: string;
+    message_count: number;
+    context_node_ids: string[];
+    messages: Array<{ id: number; role: string; content: string; created_at: string }>;
+  }
+
+  const handleLoadSession = useCallback((detail: SessionDetail) => {
+    seenEventsRef.current.clear();
+    setCurrentSessionId(detail.id);
+    const restored: Message[] = detail.messages.map((m) =>
+      mkMsg(m.role as Role, m.content)
+    );
+    setMessages(restored.length > 0 ? restored : [mkMsg("assistant", t.workspace.greeting)]);
+  }, [t]);
+
+  // ── Web save handler ─────────────────────────────────────────────────────
+
   const handleSaveHit = useCallback(async (hit: WebHit, query: string) => {
     setSaveStates((prev) => ({ ...prev, [hit.url]: "saving" }));
     try {
@@ -405,6 +575,15 @@ export function WorkspaceChat({
 
   return (
     <div className="flex flex-col h-full">
+
+      {/* ── History drawer ── */}
+      <HistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        currentSessionId={currentSessionId}
+        onLoadSession={handleLoadSession}
+        onNewSession={handleNewSession}
+      />
 
       {/* ── Header ── */}
       <div className="px-4 py-3 border-b border-stone-200 dark:border-slate-800 shrink-0
@@ -426,6 +605,19 @@ export function WorkspaceChat({
                 ? `✨ ${t.workspace.contextHint} · ${t.workspace.taskModeHint}`
                 : `${t.workspace.chatModeIdle.replace(/^💬\s*/, "")} · ${t.workspace.taskModeHint}`}
             </p>
+          </div>
+
+          {/* History button + context badges */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setHistoryOpen(true)}
+              title={t.historyDrawer.title}
+              className="text-[10px] px-2 py-1 rounded border border-slate-600/60
+                         text-slate-400 hover:text-slate-200 hover:border-slate-500
+                         transition-colors whitespace-nowrap"
+            >
+              🕐 {t.historyDrawer.title}
+            </button>
           </div>
 
           {/* Context badges */}
@@ -589,7 +781,74 @@ export function WorkspaceChat({
                     jobId={tm.jobId}
                     requirement={tm.content}
                     jobType={tm.jobType}
+                    onEvent={(type, data) => handleTaskEvent(tm.jobId, type, data)}
                   />
+                </div>
+              </div>
+            );
+          }
+
+          // Inline interview card
+          if (msg.role === "interview") {
+            const im = msg as InterviewMsg;
+            return (
+              <div key={msg.id} className="flex justify-start">
+                <div className="w-full max-w-[92%]">
+                  <InlineInterviewCard
+                    jobId={im.jobId}
+                    question={im.question}
+                    answered={im.answered}
+                    expired={im.expired}
+                    onAnswered={(answer) => {
+                      setMessages((prev) => prev.map((m) =>
+                        m.id === im.id ? { ...m, answered: answer } as InterviewMsg : m
+                      ));
+                      setMessages((prev) => [...prev, mkMsg("user", answer)]);
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          }
+
+          // Inline approval card
+          if (msg.role === "approval") {
+            const am = msg as ApprovalMsg;
+            return (
+              <div key={msg.id} className="flex justify-start">
+                <div className="w-full max-w-[92%]">
+                  <InlineApprovalCard
+                    jobId={am.jobId}
+                    pending={am.pending}
+                    responded={am.responded}
+                    expired={am.expired}
+                    onResponded={(approved, note) => {
+                      setMessages((prev) => prev.map((m) =>
+                        m.id === am.id ? { ...m, responded: { approved, note: note ?? "" } } as ApprovalMsg : m
+                      ));
+                      setMessages((prev) => [...prev,
+                        mkMsg("user", approved ? "✅ Approved" : `⛔ Rejected${note ? ": " + note : ""}`),
+                      ]);
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          }
+
+          // Rich event card (plan, file written, QA verdict)
+          if (msg.role === "rich_event") {
+            const rem = msg as RichEventMsg;
+            return (
+              <div key={msg.id} className="flex justify-start">
+                <div className="w-full max-w-[92%]">
+                  <EventCard event={{
+                    type: rem.eventType,
+                    data: rem.data,
+                    timestamp: "",
+                    job_id: "",
+                    label: "",
+                  }} />
                 </div>
               </div>
             );
@@ -597,24 +856,80 @@ export function WorkspaceChat({
 
           // User / assistant bubbles
           const isUser = msg.role === "user";
+          const isEditing = isUser && editingId === msg.id;
+
           return (
-            <div key={msg.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-              <div className={`flex items-end gap-2 max-w-[84%] ${isUser ? "flex-row-reverse" : ""}`}>
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs shrink-0 ${
-                  isUser
-                    ? "bg-blue-600 text-white"
-                    : "bg-violet-600 text-white dark:bg-violet-700"
-                }`}>
-                  {isUser ? "👤" : "🤖"}
+            <div key={msg.id} className={`flex ${isUser ? "justify-end" : "justify-start"} group/msg`}>
+              {isEditing ? (
+                /* ── Edit mode ── */
+                <div className="w-full max-w-[84%] space-y-1.5">
+                  <textarea
+                    ref={editTextareaRef}
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitEdit(msg.id); }
+                      if (e.key === "Escape") cancelEdit();
+                    }}
+                    rows={3}
+                    className="w-full bg-blue-50 dark:bg-slate-700 border border-blue-400 dark:border-blue-500/60
+                               rounded-2xl rounded-br-sm px-3.5 py-2.5 text-sm text-slate-800 dark:text-slate-100
+                               resize-none outline-none leading-relaxed"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={cancelEdit}
+                      className="text-xs px-2.5 py-1 rounded-lg text-slate-500 hover:text-slate-700
+                                 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
+                    >
+                      {t.workspace.editCancel}
+                    </button>
+                    <button
+                      onClick={() => submitEdit(msg.id)}
+                      disabled={!editContent.trim() || loading}
+                      className="text-xs px-3 py-1 rounded-lg font-medium transition-colors
+                                 bg-blue-600 hover:bg-blue-500 text-white
+                                 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {loading ? t.workspace.editRetrying : t.workspace.editSubmit}
+                    </button>
+                  </div>
                 </div>
-                <div className={`px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap shadow-sm ${
-                  isUser
-                    ? "bg-blue-600 text-white rounded-br-sm"
-                    : "bg-white text-slate-800 border border-stone-200 rounded-bl-sm dark:bg-slate-700/80 dark:text-slate-100 dark:border-transparent"
-                }`}>
-                  {msg.content}
+              ) : (
+                /* ── Normal bubble ── */
+                <div className={`flex items-end gap-2 max-w-[84%] ${isUser ? "flex-row-reverse" : ""}`}>
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs shrink-0 ${
+                    isUser
+                      ? "bg-blue-600 text-white"
+                      : "bg-violet-600 text-white dark:bg-violet-700"
+                  }`}>
+                    {isUser ? "👤" : "🤖"}
+                  </div>
+                  <div className="relative">
+                    <div className={`px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap shadow-sm ${
+                      isUser
+                        ? "bg-blue-600 text-white rounded-br-sm"
+                        : "bg-white text-slate-800 border border-stone-200 rounded-bl-sm dark:bg-slate-700/80 dark:text-slate-100 dark:border-transparent"
+                    }`}>
+                      {msg.content}
+                    </div>
+                    {/* Edit button — visible on bubble hover, only for user messages */}
+                    {isUser && (
+                      <button
+                        onClick={() => startEdit(msg.id, msg.content)}
+                        title={t.workspace.editMessage}
+                        className="absolute -top-2 -left-7 opacity-0 group-hover/msg:opacity-100
+                                   w-5 h-5 rounded-full flex items-center justify-center
+                                   bg-slate-200 dark:bg-slate-600 text-slate-500 dark:text-slate-300
+                                   hover:bg-slate-300 dark:hover:bg-slate-500
+                                   transition-all text-[10px]"
+                      >
+                        ✎
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           );
         })}
@@ -657,7 +972,7 @@ export function WorkspaceChat({
           <button
             type="button"
             tabIndex={-1}
-            title="附件请使用左侧上传区"
+            title="Use the upload panel on the left to attach files"
             className="shrink-0 w-7 h-7 mb-0.5 flex items-center justify-center rounded-md
                        text-slate-400 hover:text-slate-700 dark:hover:text-slate-300
                        hover:bg-stone-100 dark:hover:bg-slate-700/40 transition-colors"

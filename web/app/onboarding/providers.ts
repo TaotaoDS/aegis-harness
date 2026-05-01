@@ -39,6 +39,18 @@ export interface ProviderDef {
 export const ALL_PROVIDERS: ProviderDef[] = [
   // ── Global ──────────────────────────────────────────────────────────────
   {
+    id: "openrouter",
+    envKey: "OPENROUTER_API_KEY",
+    label: "OpenRouter ⭐ Recommended",
+    group: "global",
+    defaultBaseUrl: "https://openrouter.ai/api/v1",
+    suggestedModel: "anthropic/claude-sonnet-4",
+    keyPlaceholder: "sk-or-v1-…",
+    docsUrl: "https://openrouter.ai/settings/keys",
+    badge: "1 key → 300+ models",
+    badgeClass: "bg-violet-900/50 text-violet-300 border-violet-700",
+  },
+  {
     id: "anthropic",
     envKey: "ANTHROPIC_API_KEY",
     label: "Anthropic (Claude)",
@@ -130,7 +142,7 @@ export const ALL_PROVIDERS: ProviderDef[] = [
   {
     id: "qwen",
     envKey: "DASHSCOPE_API_KEY",
-    label: "Alibaba Qwen（通义千问）",
+    label: "Alibaba Qwen (Tongyi Qianwen)",
     group: "china",
     defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     suggestedModel: "qwen-max",
@@ -140,7 +152,7 @@ export const ALL_PROVIDERS: ProviderDef[] = [
   {
     id: "zhipu",
     envKey: "ZHIPUAI_API_KEY",
-    label: "智谱 GLM（Zhipu）",
+    label: "Zhipu GLM",
     group: "china",
     defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
     suggestedModel: "glm-4-flash",
@@ -160,7 +172,7 @@ export const ALL_PROVIDERS: ProviderDef[] = [
   {
     id: "baidu",
     envKey: "BAIDU_API_KEY",
-    label: "百度文心（ERNIE）",
+    label: "Baidu ERNIE",
     group: "china",
     defaultBaseUrl: "https://qianfan.baidubce.com/v2",
     suggestedModel: "ernie-4.5-8k",
@@ -180,7 +192,7 @@ export const ALL_PROVIDERS: ProviderDef[] = [
   {
     id: "yi",
     envKey: "YI_API_KEY",
-    label: "零一万物（Yi）",
+    label: "01.AI (Yi)",
     group: "china",
     defaultBaseUrl: "https://api.01.ai/v1",
     suggestedModel: "yi-large",
@@ -190,7 +202,7 @@ export const ALL_PROVIDERS: ProviderDef[] = [
   {
     id: "doubao",
     envKey: "ARK_API_KEY",
-    label: "字节豆包（Doubao）",
+    label: "ByteDance Doubao",
     group: "china",
     defaultBaseUrl: "https://ark.cn-beijing.volces.com/api/v3",
     suggestedModel: "doubao-pro-32k",

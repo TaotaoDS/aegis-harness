@@ -217,6 +217,15 @@ async def write_setting(
         except Exception:  # noqa: BLE001
             pass
 
+    # When API keys change, immediately bridge them into os.environ so the
+    # NEXT model call in this process uses the freshly saved values.
+    if key == "api_keys":
+        try:
+            from ..key_injector import inject_api_keys_to_env
+            await inject_api_keys_to_env(tid)
+        except Exception:  # noqa: BLE001
+            pass
+
     return {"key": key, "value": body.value}
 
 

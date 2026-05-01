@@ -18,12 +18,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import (
     BillingEventModel,
+    ChatMessageModel,
+    ChatSessionModel,
     CheckpointModel,
     EdgeModel,
     EventModel,
@@ -74,7 +76,13 @@ async def update_job_status(
 
 
 async def load_all_jobs(session: AsyncSession) -> List[Dict[str, Any]]:
-    """Return all job rows as plain dicts (used for crash recovery)."""
+    """Return all job rows as plain dicts (used for crash recovery).
+
+    tenant_id and created_by must be included so that multi-tenant
+    isolation is preserved after a process restart.  Without them,
+    import_job() sets both to None and every recovered job becomes
+    visible to all tenants.
+    """
     result = await session.execute(select(JobModel))
     rows = result.scalars().all()
     return [
@@ -85,9 +93,18 @@ async def load_all_jobs(session: AsyncSession) -> List[Dict[str, Any]]:
             "requirement":  row.requirement,
             "status":       row.status,
             "created_at":   row.created_at,
+            "tenant_id":    row.tenant_id,
+            "created_by":   row.created_by,
         }
         for row in rows
     ]
+
+
+async def delete_job_cascade(session: AsyncSession, job_id: str) -> None:
+    """Delete a job and all related data (events, checkpoints) in one transaction."""
+    await session.execute(delete(EventModel).where(EventModel.job_id == job_id))
+    await session.execute(delete(CheckpointModel).where(CheckpointModel.job_id == job_id))
+    await session.execute(delete(JobModel).where(JobModel.id == job_id))
 
 
 # ===========================================================================
@@ -764,4 +781,155 @@ async def update_node_embedding(
     await session.execute(
         text("UPDATE nodes SET embedding = CAST(:emb AS vector) WHERE id = :nid"),
         {"emb": str(embedding), "nid": node_id},
+    )
+
+
+# ===========================================================================
+# v2.1.0 — Chat session persistence
+# ===========================================================================
+
+def _session_row_to_dict(row: ChatSessionModel) -> Dict[str, Any]:
+    return {
+        "id":               row.id,
+        "tenant_id":        row.tenant_id,
+        "user_id":          row.user_id,
+        "title":            row.title or "",
+        "context_node_ids": row.context_node_ids or [],
+        "message_count":    row.message_count or 0,
+        "created_at":       row.created_at,
+        "updated_at":       row.updated_at or "",
+    }
+
+
+async def create_chat_session(
+    session: AsyncSession,
+    session_id: str,
+    tenant_id: str,
+    user_id: str,
+    title: str = "",
+    context_node_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Insert a new chat session row and return it as a dict."""
+    now = _now()
+    row = ChatSessionModel(
+        id=session_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        title=title,
+        context_node_ids=context_node_ids or [],
+        message_count=0,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    return _session_row_to_dict(row)
+
+
+async def get_chat_session(
+    session: AsyncSession,
+    session_id: str,
+    tenant_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Return a session dict scoped to tenant_id, or None if not found."""
+    result = await session.execute(
+        select(ChatSessionModel).where(
+            ChatSessionModel.id == session_id,
+            ChatSessionModel.tenant_id == tenant_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    return _session_row_to_dict(row) if row else None
+
+
+async def list_sessions_by_user(
+    session: AsyncSession,
+    tenant_id: str,
+    user_id: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Return recent sessions for a user, newest first."""
+    result = await session.execute(
+        select(ChatSessionModel)
+        .where(
+            ChatSessionModel.tenant_id == tenant_id,
+            ChatSessionModel.user_id == user_id,
+        )
+        .order_by(ChatSessionModel.updated_at.desc())
+        .limit(limit)
+    )
+    return [_session_row_to_dict(row) for row in result.scalars().all()]
+
+
+async def append_chat_message(
+    session: AsyncSession,
+    session_id: str,
+    role: str,
+    content: str,
+) -> None:
+    """Append a message to the session and increment message_count."""
+    session.add(ChatMessageModel(
+        session_id=session_id,
+        role=role,
+        content=content,
+        created_at=_now(),
+    ))
+    await session.execute(
+        update(ChatSessionModel)
+        .where(ChatSessionModel.id == session_id)
+        .values(
+            message_count=ChatSessionModel.message_count + 1,
+            updated_at=_now(),
+        )
+    )
+
+
+async def load_session_messages(
+    session: AsyncSession,
+    session_id: str,
+    tenant_id: str,
+) -> List[Dict[str, Any]]:
+    """Return all messages for a session in insertion order.
+
+    Returns empty list if session_id doesn't belong to tenant_id.
+    """
+    sess_row = await get_chat_session(session, session_id, tenant_id)
+    if sess_row is None:
+        return []
+    result = await session.execute(
+        select(ChatMessageModel)
+        .where(ChatMessageModel.session_id == session_id)
+        .order_by(ChatMessageModel.id)
+    )
+    return [
+        {
+            "id":         row.id,
+            "session_id": row.session_id,
+            "role":       row.role,
+            "content":    row.content,
+            "created_at": row.created_at,
+        }
+        for row in result.scalars().all()
+    ]
+
+
+async def update_session_context(
+    session: AsyncSession,
+    session_id: str,
+    tenant_id: str,
+    context_node_ids: Optional[List[str]] = None,
+    title: Optional[str] = None,
+) -> None:
+    """Update context_node_ids and/or title for a session."""
+    values: Dict[str, Any] = {"updated_at": _now()}
+    if context_node_ids is not None:
+        values["context_node_ids"] = context_node_ids
+    if title is not None:
+        values["title"] = title
+    await session.execute(
+        update(ChatSessionModel)
+        .where(
+            ChatSessionModel.id == session_id,
+            ChatSessionModel.tenant_id == tenant_id,
+        )
+        .values(**values)
     )

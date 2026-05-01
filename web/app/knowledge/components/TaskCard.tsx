@@ -22,6 +22,7 @@ interface Props {
   jobId:       string;
   requirement: string;
   jobType:     JobType;
+  onEvent?:    (type: string, data: Record<string, unknown>) => void;
 }
 
 type Phase =
@@ -60,7 +61,7 @@ const PHASE_FROM_EVENT: Record<string, Phase> = {
 // Component
 // ---------------------------------------------------------------------------
 
-export function TaskCard({ jobId, requirement, jobType }: Props) {
+export function TaskCard({ jobId, requirement, jobType, onEvent }: Props) {
   const t = useT();
   const PHASE_LABELS = t.taskCard.phaseLabels;
 
@@ -83,11 +84,14 @@ export function TaskCard({ jobId, requirement, jobType }: Props) {
 
     es.onmessage = (e) => {
       try {
-        const { type, label, data = {} } = JSON.parse(e.data as string) as {
+        const { type, label, data = {}, timestamp } = JSON.parse(e.data as string) as {
           type: string;
           label?: string;
           data?: Record<string, unknown>;
+          timestamp?: string;
         };
+
+        onEvent?.(type, { ...data, _timestamp: timestamp });
 
         // Advance phase
         if (PHASE_FROM_EVENT[type]) {

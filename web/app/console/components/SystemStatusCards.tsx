@@ -46,37 +46,37 @@ export function SystemStatusCards({ jobs, users, tenantCount, activeTenantCount,
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
       <KpiCard
-        label="总 Job 数"
+        label="Total Jobs"
         value={jobs.total}
-        sub={`${jobs.running} 运行中 · ${jobs.pending} 等待`}
+        sub={`${jobs.running} running · ${jobs.pending} pending`}
       />
       <KpiCard
-        label="已完成"
+        label="Completed"
         value={jobs.completed}
-        sub={`成功率 ${successRate}%`}
+        sub={`Success rate ${successRate}%`}
         accent="text-emerald-400"
       />
       <KpiCard
-        label="失败"
+        label="Failed"
         value={jobs.failed}
         accent={jobs.failed > 0 ? "text-red-400" : "text-white"}
       />
       <KpiCard
-        label="租户"
+        label="Tenants"
         value={activeTenantCount}
-        sub={`共 ${tenantCount} 个`}
+        sub={`${tenantCount} total`}
         accent="text-blue-400"
       />
       <KpiCard
-        label="用户"
+        label="Users"
         value={users.active}
-        sub={`共 ${users.total} 个`}
+        sub={`${users.total} total`}
         accent="text-violet-400"
       />
       <KpiCard
-        label="实际成本"
+        label="Actual Cost"
         value={`$${totalCostUsd.toFixed(4)}`}
-        sub="累计 USD"
+        sub="Cumulative USD"
         accent="text-amber-400"
       />
     </div>

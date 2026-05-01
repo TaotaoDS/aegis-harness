@@ -7,67 +7,67 @@
 
 export const EVENT_LABELS: Record<string, string> = {
   // Pipeline lifecycle
-  "pipeline.start":              "🚀 任务已启动",
-  "pipeline.complete":           "🎉 全部任务完成",
-  "pipeline.update_start":       "⚡ 正在分析现有代码库，准备增量更新…",
-  "pipeline.update_complete":    "✅ 项目更新完成",
-  "pipeline.execution_complete": "📊 执行阶段完成",
-  "pipeline.error":              "❌ 流程出错",
-  "pipeline.rejected":           "⛔ 任务已被用户取消",
+  "pipeline.start":              "🚀 Task started",
+  "pipeline.complete":           "🎉 All tasks completed",
+  "pipeline.update_start":       "⚡ Analysing existing codebase, preparing incremental update…",
+  "pipeline.update_complete":    "✅ Project update complete",
+  "pipeline.execution_complete": "📊 Execution phase complete",
+  "pipeline.error":              "❌ Pipeline error",
+  "pipeline.rejected":           "⛔ Task cancelled by user",
 
   // CEO
-  "ceo.interviewing":            "💬 正在梳理需求…",
-  "ceo.question":                "❓ CEO 提问中",
-  "ceo.planning":                "📋 正在制定开发计划…",
-  "ceo.plan_created":            "📋 开发计划已就绪",
-  "ceo.delegating":              "📤 正在分配任务给开发团队…",
-  "ceo.delegated":               "✅ 任务分配完毕",
+  "ceo.interviewing":            "💬 Clarifying requirements…",
+  "ceo.question":                "❓ CEO question pending",
+  "ceo.planning":                "📋 Drafting development plan…",
+  "ceo.plan_created":            "📋 Development plan ready",
+  "ceo.delegating":              "📤 Delegating tasks to the development team…",
+  "ceo.delegated":               "✅ Delegation complete",
 
   // Architect
-  "architect.solving":           "🔨 正在编写代码",
-  "architect.llm_response":      "💭 收到 AI 响应",
-  "architect.file_written":      "📄 文件已写入",
-  "architect.files_written":     "📦 本轮写入完成",
-  "architect.file_read":         "👁 正在查阅文件",
-  "architect.file_write_blocked":"🚫 写入被拦截（等待审批）",
-  "architect.zero_files":        "⚠️ 本次未生成任何文件，正在重试…",
-  "architect.solve_complete":    "✅ 编码完成",
+  "architect.solving":           "🔨 Writing code",
+  "architect.llm_response":      "💭 AI response received",
+  "architect.file_written":      "📄 File written",
+  "architect.files_written":     "📦 Round write complete",
+  "architect.file_read":         "👁 Reading file",
+  "architect.file_write_blocked":"🚫 Write blocked (awaiting approval)",
+  "architect.zero_files":        "⚠️ No files generated this round, retrying…",
+  "architect.solve_complete":    "✅ Coding complete",
 
   // Evaluator
-  "evaluator.running":           "🔬 正在进行沙箱验证…",
-  "evaluator.pass":              "✅ 沙箱验证通过",
-  "evaluator.fail":              "🔴 沙箱验证失败，反馈给 Architect…",
+  "evaluator.running":           "🔬 Running sandbox validation…",
+  "evaluator.pass":              "✅ Sandbox validation passed",
+  "evaluator.fail":              "🔴 Sandbox validation failed — feeding back to Architect…",
 
   // QA
-  "qa.reviewing":                "🔍 QA 正在审查代码质量…",
-  "qa.pass":                     "✅ 代码审查通过",
-  "qa.fail":                     "❌ 代码审查不通过，进入修复流程…",
+  "qa.reviewing":                "🔍 QA reviewing code quality…",
+  "qa.pass":                     "✅ Code review passed",
+  "qa.fail":                     "❌ Code review failed — entering fix cycle…",
 
   // Resilience
-  "resilience.attempt_start":    "🔄 开始新一轮尝试…",
-  "resilience.gateway_selected": "⚙️ 模型已选定",
-  "resilience.budget_exceeded":  "💸 Token 预算耗尽，停止重试",
-  "resilience.escalated":        "🆘 已达最大重试次数，移交人工处理",
+  "resilience.attempt_start":    "🔄 Starting new attempt…",
+  "resilience.gateway_selected": "⚙️ Model selected",
+  "resilience.budget_exceeded":  "💸 Token budget exhausted — stopping retries",
+  "resilience.escalated":        "🆘 Max retries reached — escalating to human review",
 
   // Knowledge
-  "knowledge.lesson_added":      "📚 已记录新经验教训",
+  "knowledge.lesson_added":      "📚 New lesson recorded",
 
   // HITL
-  "hitl.approval_required":      "🔴 需要您的批准才能继续",
-  "hitl.approved":               "✅ 已批准，继续执行…",
-  "hitl.rejected":               "⛔ 已拒绝，操作已取消",
+  "hitl.approval_required":      "🔴 Your approval is required to continue",
+  "hitl.approved":               "✅ Approved — continuing execution…",
+  "hitl.rejected":               "⛔ Rejected — operation cancelled",
 
   // CEO interview confidence
-  "ceo.interview_complete":      "✅ 需求访谈完成",
+  "ceo.interview_complete":      "✅ Requirements interview complete",
 
   // Reflection Agent (Compound Learning)
-  "reflection.start":            "🔍 正在进行经验复盘分析…",
-  "reflection.solution_saved":   "💡 经验已沉淀",
-  "reflection.complete":         "📚 复盘完成，经验已保存",
+  "reflection.start":            "🔍 Running post-mortem analysis…",
+  "reflection.solution_saved":   "💡 Lesson saved",
+  "reflection.complete":         "📚 Post-mortem complete — lessons saved",
 
   // CE Orchestrator
-  "ce.analyzing":                "📊 正在进行复盘分析…",
-  "ce.complete":                 "📊 复盘报告已生成",
+  "ce.analyzing":                "📊 Running retrospective analysis…",
+  "ce.complete":                 "📊 Retrospective report generated",
 };
 
 /** Return a human-readable label for an event type, using the backend-provided

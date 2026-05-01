@@ -20,6 +20,11 @@ Tables (v1.3.0 — FinOps billing)
 ----------------------------------
 model_pricing    — per-model input/output token price rates (USD per 1M tokens)
 billing_events   — immutable per-LLM-call cost records (audit trail)
+
+Tables (v2.1.0 — Chat session persistence)
+-------------------------------------------
+chat_sessions  — workspace chat conversation threads (multi-tenant)
+chat_messages  — append-only message log per session
 """
 
 import enum
@@ -250,6 +255,42 @@ class NodeType(str, enum.Enum):
     tag      = "tag"        # classification label
     entity   = "entity"     # named entity (person, org, place)
     solution = "solution"   # linked from SolutionModel
+
+
+class ChatSessionModel(Base):
+    """Workspace chat conversation thread.
+
+    Scoped by (tenant_id, user_id) for multi-tenant isolation.
+    ``context_node_ids`` stores the knowledge-graph node IDs that were
+    active when the session was last saved, enabling full state restore.
+    """
+    __tablename__ = "chat_sessions"
+    __table_args__ = (
+        Index("ix_chat_sessions_tenant_user", "tenant_id", "user_id"),
+    )
+
+    id               = Column(String(36),  primary_key=True)   # UUID
+    tenant_id        = Column(String(36),  nullable=False, index=True)
+    user_id          = Column(String(36),  nullable=False, index=True)
+    title            = Column(String(200), nullable=False, default="")   # first-msg excerpt
+    context_node_ids = Column(JSON,        nullable=False, default=list) # knowledge-graph ctx
+    message_count    = Column(Integer,     nullable=False, default=0)
+    created_at       = Column(String(50),  nullable=False)
+    updated_at       = Column(String(50),  nullable=True)
+
+
+class ChatMessageModel(Base):
+    """Single message in a chat session (append-only)."""
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_session", "session_id"),
+    )
+
+    id         = Column(Integer,    primary_key=True, autoincrement=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    role       = Column(String(20), nullable=False)   # "user" | "assistant" | "system"
+    content    = Column(Text,       nullable=False)
+    created_at = Column(String(50), nullable=False)
 
 
 class NodeModel(Base):

@@ -30,7 +30,7 @@ from ..event_bridge import AsyncQueueBus
 from ..hitl_manager import HITLManager
 from ..interview_manager import InterviewManager
 from ..job_runner import start_job
-from ..job_store import create_job, get_job, list_jobs, update_status
+from ..job_store import create_job, get_job, list_jobs, remove_job, update_status
 from ..models import JobCreate, JobOut
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -184,6 +184,44 @@ async def get_job_detail(
         raise HTTPException(status_code=404, detail="Job not found")
     _assert_job_access(job, current_user)
     return _to_out(job)
+
+
+async def _db_delete_job(job_id: str) -> None:
+    """Cascade-delete a job and its events/checkpoints from the DB."""
+    try:
+        from db.connection import get_session, is_db_available
+        from db.repository import delete_job_cascade
+        if not is_db_available():
+            return
+        async with get_session() as session:
+            await delete_job_cascade(session, job_id)
+    except Exception:   # noqa: BLE001
+        pass
+
+
+@router.delete("/{job_id}", status_code=204)
+async def delete_job_endpoint(
+    job_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Delete a job and cascade-remove all its events and checkpoints.
+
+    Only the job owner (or admin/owner role) may delete.
+    Running jobs are terminated before deletion (their SSE queues are closed).
+    Returns 204 No Content on success.
+    """
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _assert_job_access(job, current_user)
+
+    # Close active SSE subscriber queues so streaming clients disconnect cleanly
+    if job.bus:
+        for q in list(job.bus._queues):
+            job.bus.unsubscribe(q)
+
+    remove_job(job_id)
+    await _db_delete_job(job_id)
 
 
 def _to_out(job) -> JobOut:

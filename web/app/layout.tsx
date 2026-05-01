@@ -4,7 +4,7 @@ import { Providers } from "@/components/Providers";
 import { Shell } from "@/components/Shell";
 
 export const metadata: Metadata = {
-  title: "AegisHarness · 智控空间",
+  title: "AegisHarness · AI Workspace",
   description: "Multi-agent orchestration management console",
 };
 

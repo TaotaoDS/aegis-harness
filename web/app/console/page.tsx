@@ -78,7 +78,7 @@ export default function ConsolePage() {
       setStatsError(null);
       setLastRefresh(new Date());
     } catch (e: unknown) {
-      setStatsError(e instanceof Error ? e.message : "加载失败");
+      setStatsError(e instanceof Error ? e.message : "Failed to load");
     }
   }, []);
 
@@ -127,7 +127,7 @@ export default function ConsolePage() {
   if (authLoading) {
     return (
       <div className="flex-1 flex items-center justify-center text-slate-400">
-        加载中…
+        Loading…
       </div>
     );
   }
@@ -140,25 +140,25 @@ export default function ConsolePage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-white">控制台看板</h1>
+          <h1 className="text-xl font-bold text-white">Console Dashboard</h1>
           <p className="text-xs text-slate-500 mt-0.5">
             {lastRefresh
-              ? `上次刷新：${lastRefresh.toLocaleTimeString("zh-CN")} · 每 30 秒自动更新`
-              : "加载中…"}
+              ? `Last refreshed: ${lastRefresh.toLocaleTimeString()} · auto-updates every 30 s`
+              : "Loading…"}
           </p>
         </div>
         <button
           onClick={() => { loadStats(); loadTrends(range); }}
           className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors"
         >
-          刷新
+          Refresh
         </button>
       </div>
 
       {/* Error banner */}
       {statsError && (
         <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-2 text-sm text-red-300">
-          数据加载失败：{statsError}
+          Failed to load data: {statsError}
         </div>
       )}
 

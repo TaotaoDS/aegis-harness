@@ -102,12 +102,12 @@ class HITLManager:
             return True
         return self._request_approval(
             reason="sensitive_file",
-            action=f"写入敏感文件：{filepath}",
+            action=f"Write sensitive file: {filepath}",
             risk="high",
             details={
                 "filepath": filepath,
                 "content_preview": content[:300] + ("…" if len(content) > 300 else ""),
-                "reason": "此文件含认证、配置或密钥相关逻辑，写入前需要您的确认。",
+                "reason": "This file contains authentication, configuration, or secret-related logic. Please confirm before writing.",
             },
         )
 
@@ -117,12 +117,12 @@ class HITLManager:
         """
         return self._request_approval(
             reason="update_mode",
-            action="Update Mode：即将修改现有代码",
+            action="Update Mode: about to modify existing code",
             risk="medium",
             details={
                 "requirement": requirement,
                 "files_to_modify": files_to_modify,
-                "reason": "此操作将修改现有项目文件，请确认变更内容后再继续。",
+                "reason": "This operation will modify existing project files. Please review the changes before continuing.",
             },
         )
 

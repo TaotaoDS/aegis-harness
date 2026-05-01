@@ -233,12 +233,12 @@ export default function KnowledgePage() {
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="拖拽以调整左右面板宽度"
+        aria-label="Drag to resize left and right panels"
         onMouseDown={(e) => { e.preventDefault(); setDragging(true); }}
         onDoubleClick={() => setLeftWidth(LEFT_DEFAULT)}
         className={`resizer-handle shrink-0 w-1 ${dragging ? "is-dragging" : ""}`}
         style={{ height: "100%" }}
-        title="拖拽调整宽度 · 双击重置"
+        title="Drag to resize · double-click to reset"
       />
 
       {/* ── Right panel: Unified Workspace (QA + Tasks) ─────────────────── */}

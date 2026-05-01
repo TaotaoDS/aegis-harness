@@ -297,7 +297,8 @@ async def search_nodes(
 
     Works for both Latin and Chinese text.  For Chinese queries the tokeniser
     strips common question/function words and generates character n-grams so
-    that "什么是机器学习" correctly matches a node titled "机器学习".
+    that a query like "什么是机器学习" (What is machine learning?) correctly matches
+    a node titled "机器学习" (machine learning).
 
     Nodes are re-ranked by token-hit count (title=2 pts, content=1 pt).
     Returns up to ``req.limit`` hits ordered by relevance score descending.
@@ -315,9 +316,9 @@ async def search_nodes(
         return KnowledgeSearchResponse(hits=[])
 
     # Chinese-aware tokenisation:
-    # 1. Remove question/function words (什么/是/如何…) → clean noun phrase(s).
+    # 1. Remove Chinese question/function words (什么/是/如何…) → clean noun phrase(s).
     # 2. Split on whitespace/punctuation to get phrase tokens.
-    # 3. Generate CJK trigrams + bigrams so embedded terms like "机器学习"
+    # 3. Generate CJK trigrams + bigrams so embedded terms like "机器学习" (machine learning)
     #    are matched even when buried inside a longer query string.
     cleaned = _ZH_STOP_WORDS.sub(" ", query)
 
@@ -395,15 +396,35 @@ async def knowledge_chat(
     Accepts conversation history so multi-turn exchanges work correctly.
     All blocking LLM work runs in a thread (asyncio.to_thread) to avoid
     stalling the event loop.
+
+    Session persistence: when ``session_id`` is omitted a new session is
+    created automatically and its ID is returned in the reply so the client
+    can include it in subsequent turns.
     """
+    import uuid as _uuid
     from db.connection import get_session, is_db_available
     from db.models import NodeModel
+    from db.repository import (
+        append_chat_message,
+        create_chat_session,
+        get_chat_session,
+        update_session_context,
+    )
     from sqlalchemy import select
+
+    tenant_id = str(current_user.tenant_id)
+    user_id   = str(current_user.id)
+
+    # ── 0. Bridge DB-stored API keys → os.environ so ModelRouter sees them ─
+    try:
+        from ..key_injector import inject_api_keys_to_env
+        await inject_api_keys_to_env(tenant_id)
+    except Exception:   # noqa: BLE001
+        pass
 
     # ── 1. Fetch context from selected nodes ──────────────────────────────
     context_text = "(no context — select nodes in the graph)"
     if req.context_node_ids and is_db_available():
-        tenant_id = str(current_user.tenant_id)
         async with get_session() as session:
             rows = (await session.execute(
                 select(NodeModel).where(
@@ -413,7 +434,27 @@ async def knowledge_chat(
             )).scalars().all()
         context_text = _build_context([(r.title, r.content or "") for r in rows])
 
-    # ── 2. Build full prompt (system + history + current message) ─────────
+    # ── 2. Resolve / create session ───────────────────────────────────────
+    session_id = req.session_id or ""
+    if is_db_available():
+        async with get_session() as db:
+            if session_id:
+                existing = await get_chat_session(db, session_id, tenant_id)
+                if existing is None:
+                    session_id = ""   # unknown / foreign tenant — create fresh
+            if not session_id:
+                session_id = str(_uuid.uuid4())
+                title = req.message[:80]
+                await create_chat_session(db, session_id, tenant_id, user_id, title=title,
+                                          context_node_ids=req.context_node_ids)
+            else:
+                # Sync context_node_ids in case the user changed the selection
+                await update_session_context(db, session_id, tenant_id,
+                                             context_node_ids=req.context_node_ids)
+            await append_chat_message(db, session_id, "user", req.message)
+            await db.commit()
+
+    # ── 3. Build full prompt (system + history + current message) ─────────
     system_block = _CHAT_SYSTEM.format(context=context_text)
     history_block = ""
     for turn in req.history[-6:]:   # keep last 6 turns to stay within token budget
@@ -427,13 +468,65 @@ async def knowledge_chat(
         f"Assistant:"
     )
 
-    # ── 3. Call LLM in thread (sync call, non-blocking) ───────────────────
+    # ── 4. Call LLM in thread (sync call, non-blocking) ───────────────────
     try:
         reply = await asyncio.to_thread(_call_llm_sync, full_prompt)
     except Exception as exc:
         raise HTTPException(502, detail=f"LLM call failed: {exc}") from exc
 
-    return KnowledgeChatReply(reply=reply.strip())
+    reply_text = reply.strip()
+
+    # ── 5. Persist assistant reply ────────────────────────────────────────
+    if is_db_available() and session_id:
+        async with get_session() as db:
+            await append_chat_message(db, session_id, "assistant", reply_text)
+            await db.commit()
+
+    return KnowledgeChatReply(reply=reply_text, session_id=session_id)
+
+
+# ---------------------------------------------------------------------------
+# Session management endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/sessions")
+async def list_sessions(
+    limit: int = 50,
+    current_user: CurrentUser = Depends(require_active),
+):
+    """List recent chat sessions for the current user (newest first)."""
+    from db.connection import get_session, is_db_available
+    from db.repository import list_sessions_by_user
+
+    if not is_db_available():
+        return []
+
+    tenant_id = str(current_user.tenant_id)
+    user_id   = str(current_user.id)
+    async with get_session() as db:
+        return await list_sessions_by_user(db, tenant_id, user_id, limit=min(limit, 100))
+
+
+@router.get("/sessions/{session_id}")
+async def get_session_detail(
+    session_id: str,
+    current_user: CurrentUser = Depends(require_active),
+):
+    """Return a session's metadata + full message history."""
+    from db.connection import get_session, is_db_available
+    from db.repository import get_chat_session, load_session_messages
+
+    if not is_db_available():
+        raise HTTPException(503, detail="Database not available.")
+
+    tenant_id = str(current_user.tenant_id)
+    async with get_session() as db:
+        sess = await get_chat_session(db, session_id, tenant_id)
+        if sess is None:
+            raise HTTPException(404, detail="Session not found.")
+        messages = await load_session_messages(db, session_id, tenant_id)
+
+    return {**sess, "messages": messages}
 
 
 def _node_to_out(row) -> NodeOut:

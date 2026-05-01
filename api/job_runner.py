@@ -212,6 +212,16 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
         from dotenv import load_dotenv
         load_dotenv(_HARNESS_ROOT / ".env")
 
+        # Bridge DB-stored API keys → os.environ (DB overrides .env)
+        tenant_id = job.tenant_id or _BOOTSTRAP_TENANT
+        try:
+            from .key_injector import inject_api_keys_to_env
+            asyncio.run_coroutine_threadsafe(
+                inject_api_keys_to_env(tenant_id), loop
+            ).result(timeout=5.0)
+        except Exception:   # noqa: BLE001
+            pass
+
         from core_orchestrator.model_router import ModelRouter
         from core_orchestrator.llm_gateway import LLMGateway
         from core_orchestrator.pii_sanitizer import default_pipeline
@@ -223,7 +233,6 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
         )
 
         # ── FinOps: install billing context for this pipeline thread ─────
-        tenant_id = job.tenant_id or _BOOTSTRAP_TENANT
         credit_balance = _load_credit_balance(loop, tenant_id)
         billing_ctx = BillingContext(
             tenant_id=tenant_id,

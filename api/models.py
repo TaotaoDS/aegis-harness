@@ -78,10 +78,12 @@ class KnowledgeChatRequest(BaseModel):
     message: str
     context_node_ids: List[str] = []
     history: List[KnowledgeChatMessage] = []
+    session_id: Optional[str] = None   # None → create new session
 
 
 class KnowledgeChatReply(BaseModel):
     reply: str
+    session_id: str = ""   # always returned so the client can persist it
 
 
 class KnowledgeSearchRequest(BaseModel):

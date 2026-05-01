@@ -73,7 +73,7 @@ export function UploadPanel({ onUploaded }: Props) {
         } else if (key === "failed") {
           stopPoll();
           setStatus("error");
-          setErr(meta.error ?? "摄取失败，请重试");
+          setErr(meta.error ?? "Ingestion failed, please try again");
         }
       } catch { /* network hiccup — keep polling */ }
     }, 2000);

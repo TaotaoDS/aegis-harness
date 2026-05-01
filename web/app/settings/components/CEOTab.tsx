@@ -76,7 +76,7 @@ export function CEOTab({ initial, onSave }: Props) {
           rows={5}
           value={form.system_prompt_prefix}
           onChange={(e) => update("system_prompt_prefix", e.target.value)}
-          placeholder="填写后此内容将被插入到每次访谈的系统提示词头部，例如：&#10;You are working for Acme Corp, a logistics software company.&#10;Always ensure solutions are GDPR-compliant."
+          placeholder="When filled, this content is prepended to the system prompt of every interview, e.g.:&#10;You are working for Acme Corp, a logistics software company.&#10;Always ensure solutions are GDPR-compliant."
         />
         <p className="text-xs text-slate-500 mt-1">
           {t.ceo.promptPrefixHint}

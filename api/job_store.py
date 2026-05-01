@@ -83,6 +83,12 @@ def update_status(job_id: str, status: str) -> None:
         job.status = status
 
 
+def remove_job(job_id: str) -> None:
+    """Remove a job from the in-memory store (called after cascade DB delete)."""
+    with _lock:
+        _store.pop(job_id, None)
+
+
 def import_job(job_data: Dict[str, Any]) -> JobRecord:
     """Reconstruct a ``JobRecord`` from a persisted dict.
 

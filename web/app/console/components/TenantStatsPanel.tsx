@@ -20,7 +20,7 @@ const PLAN_BADGE: Record<string, string> = {
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+    return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
   } catch {
     return iso?.slice(0, 10) ?? "—";
   }
@@ -31,10 +31,10 @@ export function TenantStatsPanel({ tenants }: Props) {
 
   return (
     <div className="bg-[#0d1526] border border-slate-700/50 rounded-xl p-5">
-      <h2 className="text-sm font-semibold text-white mb-4">租户列表</h2>
+      <h2 className="text-sm font-semibold text-white mb-4">Tenant List</h2>
 
       {tenants.length === 0 ? (
-        <p className="text-slate-500 text-sm">暂无租户数据</p>
+        <p className="text-slate-500 text-sm">No tenant data available</p>
       ) : (
         <div className="space-y-3">
           {tenants.map((t) => (

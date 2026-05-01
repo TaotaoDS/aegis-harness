@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useT } from "@/lib/i18n";
 
 interface APIKeys {
+  openrouter?: string;
   anthropic?: string;
   openai?: string;
   nvidia?: string;
@@ -30,6 +31,14 @@ interface Provider {
 }
 
 const PROVIDERS: Provider[] = [
+  {
+    key: "openrouter" as keyof APIKeys,
+    name: "OpenRouter ⭐",
+    placeholder: "sk-or-v1-…",
+    link: "https://openrouter.ai/settings/keys",
+    badge: "text-violet-300 bg-violet-900/30 border-violet-700",
+    hint: "One key unlocks 300+ models (Claude / GPT / Gemini / Llama / DeepSeek, etc.) — recommended as first choice.",
+  },
   {
     key: "anthropic" as keyof APIKeys,
     name: "Anthropic (Claude)",
@@ -60,7 +69,7 @@ const PROVIDERS: Provider[] = [
   },
   {
     key: "zhipu" as keyof APIKeys,
-    name: "智谱 GLM",
+    name: "Zhipu GLM",
     placeholder: "xxxxx.xxxxxxx",
     link: "https://open.bigmodel.cn",
     badge: "text-purple-300 bg-purple-900/30 border-purple-700",
@@ -81,7 +90,7 @@ const PROVIDERS: Provider[] = [
   },
   {
     key: "qwen" as keyof APIKeys,
-    name: "Alibaba Qwen (通义千问)",
+    name: "Alibaba Qwen (Tongyi Qianwen)",
     placeholder: "sk-…",
     link: "https://dashscope.console.aliyun.com/apiKey",
     badge: "text-orange-300 bg-orange-900/30 border-orange-700",
@@ -92,7 +101,7 @@ const PROVIDERS: Provider[] = [
     placeholder: "BSA…",
     link: "https://brave.com/search/api/",
     badge: "text-amber-300 bg-amber-900/30 border-amber-700",
-    hint: "联网搜索功能所需。免费套餐 2000 次/月，无此 Key 时自动降级为直接爬取。",
+    hint: "Required for web search. Free tier: 2,000 requests/month. Falls back to direct crawling when not set.",
   },
 ];
 

@@ -1,12 +1,14 @@
 # =============================================================================
 # Model Configuration — AegisHarness
 # =============================================================================
-# 此文件定义所有可用模型及路由规则。
-# API Key 绝不存储在此文件中，只引用 .env 中的环境变量名。
+# This file defines all available models and routing rules.
+# API keys are NEVER stored here — only environment variable names from .env
+# are referenced.
 #
-# 可选字段：
-#   temperature   — 采样温度 (默认 0.7)
-#   base_url_env  — 自定义 API 端点的环境变量名 (用于兼容 OpenAI 协议的第三方模型)
+# Optional fields:
+#   temperature   — sampling temperature (default 0.7)
+#   base_url_env  — env var name for a custom API endpoint (used for
+#                   third-party models that expose an OpenAI-compatible API)
 # =============================================================================
 
 models:
@@ -20,7 +22,7 @@ models:
     api_key_env: ANTHROPIC_API_KEY
     max_tokens: 8192
     tier: standard
-    # temperature: 0.7                     # 可选，默认 0.7
+    # temperature: 0.7                     # optional, defaults to 0.7
 
   claude-opus:
     provider: anthropic
@@ -28,7 +30,7 @@ models:
     api_key_env: ANTHROPIC_API_KEY
     max_tokens: 8192
     tier: advanced
-    # temperature: 0.5                     # 推理任务建议低温
+    # temperature: 0.5                     # lower temperature recommended for reasoning tasks
 
   # ---------------------------------------------------------------------------
   # OpenAI
@@ -39,50 +41,53 @@ models:
     api_key_env: OPENAI_API_KEY
     max_tokens: 8192
     tier: standard
-    # base_url_env: OPENAI_BASE_URL        # 如需代理，在 .env 中设置 OPENAI_BASE_URL
+    # base_url_env: OPENAI_BASE_URL        # set OPENAI_BASE_URL in .env to use a proxy
 
   # ---------------------------------------------------------------------------
-  # NVIDIA NIM (OpenAI 兼容协议)
-  # 覆盖 Llama 3、Mixtral、Mistral 等数百个开源模型的推理端点。
-  # 申请 Key: https://build.nvidia.com  (免费额度 1000 次调用)
+  # NVIDIA NIM (OpenAI-compatible API)
+  # Covers inference endpoints for hundreds of open-source models including
+  # Llama 3, Mixtral, Mistral, and more.
+  # Get a key: https://build.nvidia.com  (free tier: 1,000 calls)
   #
-  # 写法 A — 环境变量名间接引用 (原有方式，始终兼容):
+  # Pattern A — indirect reference via env var name (original approach, always compatible):
   nvidia-glm:
     provider: openai
     model_id: z-ai/glm-5.1
     api_key_env: NVIDIA_API_KEY
-    base_url_env: NVIDIA_BASE_URL        # https://integrate.api.nvidia.com/v1
+    base_url_env: NVIDIA_BASE_URL        # e.g. https://integrate.api.nvidia.com/v1
     max_tokens: 16384
     temperature: 0.2
     tier: standard
   #
-  # 写法 B — ${VAR} 内联插值 (新增，推荐用于第三方接口，更直观):
+  # Pattern B — ${VAR} inline interpolation (new; recommended for third-party
+  # endpoints; more explicit):
   # nvidia-llama:
   #   provider: openai
   #   model_id: meta/llama-3.3-70b-instruct
   #   api_key: ${NVIDIA_API_KEY}
-  #   base_url: https://integrate.api.nvidia.com/v1   # 也可写 ${NVIDIA_BASE_URL}
+  #   base_url: https://integrate.api.nvidia.com/v1   # or ${NVIDIA_BASE_URL}
   #   max_tokens: 4096
   #   temperature: 0.2
   #   tier: standard
   #
-  # 启用后在 routes 中加一条即可，例如:
+  # After enabling, add one entry to routes, e.g.:
   #   - match: { task: "reasoning" }
   #     model: nvidia-llama
   # ---------------------------------------------------------------------------
 
   # ---------------------------------------------------------------------------
-  # DeepSeek (OpenAI 兼容协议)
-  # 免费额度充足，适合开发调试。取消注释即可启用。
-  # 申请 Key: https://platform.deepseek.com
+  # DeepSeek (OpenAI-compatible API)
+  # Generous free tier, well-suited for development and debugging.
+  # Uncomment to enable.
+  # Get a key: https://platform.deepseek.com
   # ---------------------------------------------------------------------------
   # deepseek-chat:
-  #   provider: openai                     # 使用 OpenAI 兼容接口
+  #   provider: openai                     # uses the OpenAI-compatible endpoint
   #   model_id: deepseek-chat
   #   api_key_env: DEEPSEEK_API_KEY
   #   base_url_env: DEEPSEEK_BASE_URL      # https://api.deepseek.com/v1
   #   max_tokens: 8192
-  #   temperature: 0.3                     # DeepSeek 推理建议低温
+  #   temperature: 0.3                     # lower temperature recommended for DeepSeek reasoning
   #   tier: standard
 
   # deepseek-reasoner:
@@ -91,19 +96,20 @@ models:
   #   api_key_env: DEEPSEEK_API_KEY
   #   base_url_env: DEEPSEEK_BASE_URL
   #   max_tokens: 8192
-  #   temperature: 0.0                     # 推理模型建议 0
+  #   temperature: 0.0                     # temperature 0 recommended for reasoning models
   #   tier: advanced
 
   # ---------------------------------------------------------------------------
-  # 智谱 GLM (OpenAI 兼容协议)
-  # 国产大模型，中文能力优秀。取消注释即可启用。
-  # 申请 Key: https://open.bigmodel.cn
+  # Zhipu GLM (OpenAI-compatible API)
+  # Domestic Chinese LLM with excellent Chinese-language capability.
+  # Uncomment to enable.
+  # Get a key: https://open.bigmodel.cn
   # ---------------------------------------------------------------------------
   glm-5:
      provider: openai
      model_id: glm-5
      api_key_env: ZHIPU_API_KEY
-     base_url_env: ZHIPU_BASE_URL         # https://open.bigmodel.cn/api/paas/v4
+     base_url_env: ZHIPU_BASE_URL         # e.g. https://open.bigmodel.cn/api/paas/v4
      max_tokens: 8192
      temperature: 0.7
   #   tier: standard
@@ -112,40 +118,151 @@ models:
      provider: openai
      model_id: glm-5-turbo
      api_key_env: ZHIPU_API_KEY
-     base_url_env: ZHIPU_BASE_URL         # https://open.bigmodel.cn/api/paas/v4
+     base_url_env: ZHIPU_BASE_URL         # e.g. https://open.bigmodel.cn/api/paas/v4
      max_tokens: 8192
      temperature: 0.7
   #   tier: standard
 
   glm-4.7:
      provider: openai
-     model_id: glm-4.7                # 免费模型，速度快
+     model_id: glm-4.7                # free-tier model, fast
      api_key_env: ZHIPU_API_KEY
      base_url_env: ZHIPU_BASE_URL
      max_tokens: 8192
      temperature: 0.7
   #   tier: standard
+
+  # ---------------------------------------------------------------------------
+  # OpenRouter — unified gateway; one key unlocks 300+ models
+  # (Anthropic / OpenAI / Google / Meta and more)
+  # Get a key: https://openrouter.ai/settings/keys  (free tier available)
+  # Model list: https://openrouter.ai/models
+  # ---------------------------------------------------------------------------
+  openrouter-claude-sonnet:
+    provider: openai                                # OpenRouter is OpenAI-protocol compatible
+    model_id: anthropic/claude-sonnet-4             # routed to Claude via OpenRouter
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.7
+    tier: standard
+
+  openrouter-claude-opus:
+    provider: openai
+    model_id: anthropic/claude-opus-4
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.5
+    tier: advanced
+
+  openrouter-gpt-4o:
+    provider: openai
+    model_id: openai/gpt-4o
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.7
+    tier: standard
+
+  openrouter-gemini-flash:
+    provider: openai
+    model_id: google/gemini-2.0-flash-001           # fast and cost-effective
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.7
+    tier: standard
+
+  openrouter-gemini-pro:
+    provider: openai
+    model_id: google/gemini-pro-1.5
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.5
+    tier: advanced
+
+  openrouter-llama-3.3-70b:
+    provider: openai
+    model_id: meta-llama/llama-3.3-70b-instruct     # open-source flagship, strong coding ability
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.7
+    tier: standard
+
+  openrouter-deepseek-v3:
+    provider: openai
+    model_id: deepseek/deepseek-chat-v3-0324         # DeepSeek V3, excellent for Chinese and code
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.3
+    tier: standard
+
+  openrouter-deepseek-r1:
+    provider: openai
+    model_id: deepseek/deepseek-r1                   # reasoning model, on par with o1
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.0
+    tier: advanced
+
+  openrouter-qwen-72b:
+    provider: openai
+    model_id: qwen/qwen-2.5-72b-instruct             # Qwen, top choice for Chinese language tasks
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.7
+    tier: standard
+
+  openrouter-mistral-large:
+    provider: openai
+    model_id: mistralai/mistral-large-2411           # Mistral flagship model
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tokens: 8192
+    temperature: 0.7
+    tier: standard
+
 routes:
   # ---------------------------------------------------------------------------
-  # 智能路由：从上到下依次匹配，自动跳过 API Key 未配置的模型
-  # 只需在 .env 中设置任意一个 Key，路由器就会自动使用该模型
+  # Smart routing: evaluated top-to-bottom; models without a configured API
+  # key are automatically skipped.
+  # Set any single key in .env and the router will use that model automatically.
   # ---------------------------------------------------------------------------
   - match: {}
-    model: claude-sonnet           # 首选：Anthropic（需 ANTHROPIC_API_KEY）
+    model: claude-sonnet           # first choice: Anthropic (requires ANTHROPIC_API_KEY)
   - match: {}
-    model: gpt-4o                  # 次选：OpenAI（需 OPENAI_API_KEY）
+    model: gpt-4o                  # second choice: OpenAI (requires OPENAI_API_KEY)
   - match: {}
-    model: nvidia-glm              # 备用：NVIDIA NIM GLM-5.1（需 NVIDIA_API_KEY）
+    model: nvidia-glm              # fallback: NVIDIA NIM GLM-5.1 (requires NVIDIA_API_KEY)
   - match: {}
-    model: glm-5                   # 备用：智谱 GLM-5（需 ZHIPU_API_KEY）
+    model: glm-5                   # fallback: Zhipu GLM-5 (requires ZHIPU_API_KEY)
   - match: {}
-    model: glm-5-turbo             # 备用：智谱 GLM-5-Turbo（需 ZHIPU_API_KEY）
+    model: glm-5-turbo             # fallback: Zhipu GLM-5-Turbo (requires ZHIPU_API_KEY)
   - match: {}
-    model: glm-4.7                 # 备用：智谱 GLM-4.7 免费版（需 ZHIPU_API_KEY）
+    model: glm-4.7                 # fallback: Zhipu GLM-4.7 free tier (requires ZHIPU_API_KEY)
+  # --- OpenRouter (1 key → 300+ models) ----------------------------------------
+  - match: {}
+    model: openrouter-claude-sonnet  # OpenRouter → Claude Sonnet 4
+  - match: {}
+    model: openrouter-gpt-4o         # OpenRouter → GPT-4o
+  - match: {}
+    model: openrouter-gemini-flash   # OpenRouter → Gemini 2.0 Flash
+  - match: {}
+    model: openrouter-deepseek-v3    # OpenRouter → DeepSeek V3
+  - match: {}
+    model: openrouter-qwen-72b       # OpenRouter → Qwen 2.5 72B
+  - match: {}
+    model: openrouter-llama-3.3-70b  # OpenRouter → Llama 3.3 70B
   # ---------------------------------------------------------------------------
-  # Kimi / Moonshot (OpenAI 兼容协议)
-  # 长上下文能力突出 (128k/1M)。取消注释即可启用。
-  # 申请 Key: https://platform.moonshot.cn
+  # Kimi / Moonshot (OpenAI-compatible API)
+  # Outstanding long-context capability (128k / 1M tokens). Uncomment to enable.
+  # Get a key: https://platform.moonshot.cn
   # ---------------------------------------------------------------------------
   # moonshot-v1-8k:
   #   provider: openai
@@ -158,7 +275,7 @@ routes:
 
   # moonshot-v1-128k:
   #   provider: openai
-  #   model_id: moonshot-v1-128k            # 128k 长上下文
+  #   model_id: moonshot-v1-128k            # 128k long-context window
   #   api_key_env: MOONSHOT_API_KEY
   #   base_url_env: MOONSHOT_BASE_URL
   #   max_tokens: 8192
@@ -166,12 +283,12 @@ routes:
   #   tier: advanced
 
   # ---------------------------------------------------------------------------
-  # 本地 / 自部署 (Ollama, vLLM, LiteLLM 等 OpenAI 兼容端点)
+  # Local / self-hosted (Ollama, vLLM, LiteLLM, or any OpenAI-compatible endpoint)
   # ---------------------------------------------------------------------------
   # local-llama:
   #   provider: openai
-  #   model_id: llama3                      # Ollama 中的模型名
-  #   api_key_env: LOCAL_API_KEY            # Ollama 默认不需要 Key，填任意值即可
+  #   model_id: llama3                      # model name as registered in Ollama
+  #   api_key_env: LOCAL_API_KEY            # Ollama requires no key by default; any non-empty value works
   #   base_url_env: LOCAL_BASE_URL          # http://localhost:11434/v1
   #   max_tokens: 8192
   #   temperature: 0.7
@@ -179,22 +296,23 @@ routes:
 
 
 # =============================================================================
-# 执行参数 (Evaluator 沙盒验证 + 重试熔断)
+# Execution parameters (Evaluator sandbox validation + retry circuit-breaker)
 # =============================================================================
 
 execution:
-  max_retries: 3          # Architect 最大重试次数 (包含 Evaluator 和 QA 失败)
-  eval_timeout: 30        # Evaluator 沙盒超时秒数
-  token_budget: 100000    # 全局 token 预算
-  token_threshold: 0.8    # 预算使用率熔断阈值 (80%)
-  # preferred_model: ${AEGIS_DEFAULT_MODEL}   # 取消注释可强制指定首选模型
-  #   示例 .env 配置: AEGIS_DEFAULT_MODEL=claude-sonnet
-  #   留空则按 routes 顺序自动选择第一个有可用 Key 的模型
+  max_retries: 3          # max Architect retries (includes Evaluator and QA failures)
+  eval_timeout: 30        # Evaluator sandbox timeout in seconds
+  token_budget: 100000    # global token budget
+  token_threshold: 0.8    # circuit-breaker threshold when budget usage reaches 80%
+  # preferred_model: ${AEGIS_DEFAULT_MODEL}   # uncomment to force a specific preferred model
+  #   Example .env entry: AEGIS_DEFAULT_MODEL=claude-sonnet
+  #   If left empty, the router selects the first model with an available key in routes order
 
 # =============================================================================
-# 路由规则 (从上到下匹配，第一条命中即返回；空 match 为兜底)
+# Route rules (evaluated top-to-bottom; first match wins; empty match is catch-all)
 # =============================================================================
-# 启用第三方模型后，修改下方路由即可切换默认模型。例如：
+# After enabling a third-party model, update the routes below to change the
+# default model. Example:
 #   - match: {}
 #     model: deepseek-chat
 # =============================================================================
@@ -206,41 +324,42 @@ execution:
 #    model: claude-sonnet
 #  - match: { task: "reasoning" }
 #    model: gpt-4o
-#  - match: {}                               # 兜底路由
+#  - match: {}                               # catch-all route
 #    model: claude-sonnet
 
 # =============================================================================
-# Embedding model (知识库语义检索)
+# Embedding model (knowledge-base semantic retrieval)
 # =============================================================================
-# 控制 core_orchestrator/vector_store.py 使用的 embedding 后端。
-# 优先级：EMBEDDING_* 环境变量 > 此配置文件 > 自动检测
+# Controls which embedding backend core_orchestrator/vector_store.py uses.
+# Priority: EMBEDDING_* environment variables > this config file > auto-detection
 #
-# provider 可选值:
-#   openai  — 使用 OpenAI Embeddings API (或任何 OpenAI 兼容端点)
-#             需要安装 openai 包；需要 OPENAI_API_KEY 或自定义 api_key_env
-#   ollama  — 使用 Ollama 本地 REST API，纯 stdlib 实现，断网可用
-#             默认端点 http://localhost:11434，可通过 base_url 修改
+# Supported providers:
+#   openai  — uses the OpenAI Embeddings API (or any OpenAI-compatible endpoint)
+#             requires the openai package; needs OPENAI_API_KEY or a custom api_key_env
+#   ollama  — uses the Ollama local REST API, pure stdlib implementation,
+#             works offline; default endpoint http://localhost:11434,
+#             overridable via base_url
 #
-# 离线 / 断网模式示例 (取消下面注释并按需调整):
+# Offline / air-gapped example (uncomment and adjust as needed):
 # ---------------------------------------------------------------------------
 #embedding:
 #  provider: ollama
-#  model: nomic-embed-text       # 其他可选: mxbai-embed-large, all-minilm
+#  model: nomic-embed-text       # alternatives: mxbai-embed-large, all-minilm
 #  base_url: http://localhost:11434
 #
-# 云端 OpenAI 模式示例:
+# Cloud OpenAI example:
 # ---------------------------------------------------------------------------
 #embedding:
 #  provider: openai
 #  model: text-embedding-3-small
-#  api_key_env: OPENAI_API_KEY   # 存放 API Key 的环境变量名
-#  # base_url: https://...       # OpenAI 兼容端点 (Azure/LM Studio 等)
+#  api_key_env: OPENAI_API_KEY   # env var holding the API key
+#  # base_url: https://...       # OpenAI-compatible endpoint (Azure, LM Studio, etc.)
 #
-# NVIDIA NIM 模式 (当前激活 — 免费额度 1000 次调用):
+# NVIDIA NIM mode (currently active — free tier: 1,000 calls):
 # ---------------------------------------------------------------------------
 embedding:
-  provider: openai                              # NVIDIA NIM 使用 OpenAI 兼容协议
-  model: nvidia/nv-embedqa-e5-v5               # 1024 维，语义检索最优模型
+  provider: openai                              # NVIDIA NIM uses the OpenAI-compatible protocol
+  model: nvidia/nv-embedqa-e5-v5               # 1024-dim model, optimised for semantic retrieval
   base_url: https://integrate.api.nvidia.com/v1
-  api_key_env: NVIDIA_API_KEY                   # .env 中的 NVIDIA_API_KEY
+  api_key_env: NVIDIA_API_KEY                   # NVIDIA_API_KEY from .env
 

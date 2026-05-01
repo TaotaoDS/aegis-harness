@@ -37,8 +37,9 @@ export default function JobDetailPage() {
   const router  = useRouter();
   const t = useT();
 
-  const [job,      setJob]      = useState<JobDetail | null>(null);
-  const [jobError, setJobError] = useState("");
+  const [job,        setJob]        = useState<JobDetail | null>(null);
+  const [jobError,   setJobError]   = useState("");
+  const [deleting,   setDeleting]   = useState(false);
 
   // SSE event stream
   const { events, connected, done } = useEventStream(id);
@@ -108,6 +109,25 @@ export default function JobDetailPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events.length]);
 
+  // ── Delete handler ─────────────────────────────────────────────────────
+  const handleDelete = async () => {
+    if (!window.confirm(t.jobDetail.deleteConfirm)) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/proxy/jobs/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert(t.jobDetail.deleteFailed((j as { detail?: string }).detail ?? `HTTP ${res.status}`));
+      } else {
+        router.push("/");
+      }
+    } catch (err) {
+      alert(t.jobDetail.deleteFailed(String(err)));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   // ── Derived state ──────────────────────────────────────────────────────
   const finalStatus = job?.status ?? "pending";
   const showSummary = done && TERMINAL_EVENTS.has(events[events.length - 1]?.type ?? "");
@@ -164,7 +184,18 @@ export default function JobDetailPage() {
               <span>{new Date(job.created_at).toLocaleString()}</span>
             </div>
           </div>
-          <JobStatusBadge status={finalStatus} />
+          <div className="flex items-center gap-2">
+            <JobStatusBadge status={finalStatus} />
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
+                         border border-red-800/60 text-red-400 hover:text-red-300
+                         hover:bg-red-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {deleting ? t.jobDetail.deleting : t.jobDetail.deleteBtn}
+            </button>
+          </div>
         </div>
       </div>
 

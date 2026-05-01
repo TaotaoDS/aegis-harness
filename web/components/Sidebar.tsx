@@ -48,7 +48,7 @@ function WorkspaceSwitcher({ user }: { user: { role: string; tenant: { id: strin
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  const currentName = user.tenant?.name ?? (user.role === "super_admin" ? "系统管理" : "—");
+  const currentName = user.tenant?.name ?? (user.role === "super_admin" ? "System Admin" : "—");
 
   return (
     <div ref={ref} className="relative px-3 pt-3 pb-1">
@@ -71,15 +71,15 @@ function WorkspaceSwitcher({ user }: { user: { role: string; tenant: { id: strin
                         border border-stone-200 dark:border-slate-700 rounded-xl shadow-xl z-50
                         max-h-64 overflow-y-auto">
           {user.role !== "super_admin" ? (
-            <div className="px-3 py-3 text-xs text-slate-500">仅超级管理员可切换租户</div>
+            <div className="px-3 py-3 text-xs text-slate-500">Only super admins can switch tenants</div>
           ) : loading ? (
-            <div className="px-3 py-3 text-xs text-slate-500">加载中…</div>
+            <div className="px-3 py-3 text-xs text-slate-500">Loading…</div>
           ) : tenants.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-slate-500">暂无租户</div>
+            <div className="px-3 py-3 text-xs text-slate-500">No tenants found</div>
           ) : (
             <>
               <div className="px-3 py-2 border-b border-stone-200 dark:border-slate-700/50">
-                <p className="text-[10px] text-slate-500 uppercase tracking-wide">所有租户</p>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wide">All Tenants</p>
               </div>
               {tenants.map((t) => (
                 <div
@@ -93,7 +93,7 @@ function WorkspaceSwitcher({ user }: { user: { role: string; tenant: { id: strin
                     <p className="text-[10px] text-slate-500">{t.plan} · {t.slug}</p>
                   </div>
                   {t.id === user.tenant?.id && (
-                    <span className="text-[10px] text-blue-600 dark:text-blue-400 shrink-0 ml-2">当前</span>
+                    <span className="text-[10px] text-blue-600 dark:text-blue-400 shrink-0 ml-2">Current</span>
                   )}
                 </div>
               ))}
@@ -114,7 +114,7 @@ function ThemeToggle() {
   return (
     <button
       onClick={toggleTheme}
-      title={theme === "dark" ? "切换到亮色模式" : "切换到暗色模式"}
+      title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       className="text-xs px-2 py-1 rounded-md
                  text-slate-600 hover:text-slate-900 hover:bg-stone-200
                  dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800
@@ -139,7 +139,7 @@ export function Sidebar() {
   const isSuperAdmin   = user?.role === "super_admin";
   const isAdminOrOwner = isSuperAdmin || user?.role === "owner" || user?.role === "admin";
 
-  // Menu order matches the design spec — 智控空间 sits at the top as primary entry
+  // Menu order matches the design spec — AI Workspace sits at the top as the primary entry
   const links = [
     { href: "/knowledge",  label: t.nav.workspace,             icon: "🤖" },
     { href: "/dashboard",  label: t.nav.dashboard,             icon: "📋" },
@@ -152,7 +152,7 @@ export function Sidebar() {
   function isActive(href: string, label: string): boolean {
     if (href === "/knowledge") return pathname?.startsWith("/knowledge") ?? false;
     if (href === "/dashboard") return pathname === "/dashboard";
-    // The "系统管理 / System" entry is purely a section header — never active
+    // The "System Admin" entry is purely a section header — never active
     if (href === "/admin" && label === t.nav.sysAdmin) return false;
     return pathname?.startsWith(href) ?? false;
   }
@@ -163,7 +163,7 @@ export function Sidebar() {
   }
 
   function roleLabel(role: string): string {
-    if (role === "super_admin") return "超级管理员";
+    if (role === "super_admin") return "Super Admin";
     if (role === "owner")  return t.auth.roleOwner;
     if (role === "admin")  return t.auth.roleAdmin;
     return t.auth.roleMember;

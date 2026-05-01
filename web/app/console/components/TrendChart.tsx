@@ -40,8 +40,7 @@ function formatTime(iso: string, range: Range): string {
   try {
     const d = new Date(iso);
     if (range === "7d") return `${d.getMonth() + 1}/${d.getDate()}`;
-    if (range === "24h") return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-    return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   } catch {
     return iso;
   }
@@ -56,7 +55,7 @@ export function TrendChart({ data, range, onRangeChange, loading }: Props) {
   return (
     <div className="bg-[#0d1526] border border-slate-700/50 rounded-xl p-5">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-semibold text-white">API 调用趋势</h2>
+        <h2 className="text-sm font-semibold text-white">API Call Trends</h2>
         <div className="flex gap-1">
           {RANGES.map(({ key, label }) => (
             <button
@@ -76,11 +75,11 @@ export function TrendChart({ data, range, onRangeChange, loading }: Props) {
 
       {loading ? (
         <div className="h-48 flex items-center justify-center text-slate-500 text-sm">
-          加载中…
+          Loading…
         </div>
       ) : chartData.length === 0 ? (
         <div className="h-48 flex items-center justify-center text-slate-500 text-sm">
-          暂无数据
+          No data available
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={220}>
@@ -105,11 +104,11 @@ export function TrendChart({ data, range, onRangeChange, loading }: Props) {
               itemStyle={{ fontSize: 12 }}
             />
             <Legend wrapperStyle={{ fontSize: 12, color: "#94a3b8" }} />
-            <Bar dataKey="jobs" name="提交" fill="#3b82f6" radius={[3, 3, 0, 0]} maxBarSize={24} />
+            <Bar dataKey="jobs" name="Submitted" fill="#3b82f6" radius={[3, 3, 0, 0]} maxBarSize={24} />
             <Line
               type="monotone"
               dataKey="completed"
-              name="完成"
+              name="Completed"
               stroke="#10b981"
               strokeWidth={2}
               dot={false}
@@ -117,7 +116,7 @@ export function TrendChart({ data, range, onRangeChange, loading }: Props) {
             <Line
               type="monotone"
               dataKey="failed"
-              name="失败"
+              name="Failed"
               stroke="#f87171"
               strokeWidth={2}
               dot={false}

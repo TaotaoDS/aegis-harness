@@ -31,7 +31,7 @@ export default function AdminPage() {
       setFetchError(null);
       setLastRefresh(new Date());
     } catch (e: unknown) {
-      setFetchError(e instanceof Error ? e.message : "加载失败");
+      setFetchError(e instanceof Error ? e.message : "Failed to load");
     }
   }, []);
 
@@ -53,7 +53,7 @@ export default function AdminPage() {
         setPendingUsers((prev) => prev.filter((u) => u.id !== userId));
       }, 800);
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : "审批失败");
+      alert(e instanceof Error ? e.message : "Approval failed");
     } finally {
       setApproving((p) => ({ ...p, [userId]: false }));
     }
@@ -62,7 +62,7 @@ export default function AdminPage() {
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center text-slate-400">
-        加载中…
+        Loading…
       </div>
     );
   }
@@ -73,27 +73,27 @@ export default function AdminPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-white">用户审批管理</h1>
+          <h1 className="text-xl font-bold text-white">User Approval</h1>
           <p className="text-xs text-slate-500 mt-0.5">
             {lastRefresh
-              ? `上次刷新：${lastRefresh.toLocaleTimeString("zh-CN")}`
-              : "加载中…"}
+              ? `Last refreshed: ${lastRefresh.toLocaleTimeString()}`
+              : "Loading…"}
             {" · "}
-            共 {pendingUsers.length} 个待审批用户
+            {pendingUsers.length} pending user(s)
           </p>
         </div>
         <button
           onClick={loadUsers}
           className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors"
         >
-          刷新
+          Refresh
         </button>
       </div>
 
       {/* Error */}
       {fetchError && (
         <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-2 text-sm text-red-300">
-          加载失败：{fetchError}
+          Failed to load: {fetchError}
         </div>
       )}
 
@@ -101,8 +101,8 @@ export default function AdminPage() {
       {!fetchError && pendingUsers.length === 0 && (
         <div className="bg-[#0d1526] border border-slate-700/50 rounded-xl px-6 py-12 text-center">
           <div className="text-3xl mb-3">🎉</div>
-          <p className="text-slate-300 font-medium">暂无待审批用户</p>
-          <p className="text-slate-500 text-sm mt-1">新注册用户会在此处显示，等待您的审批。</p>
+          <p className="text-slate-300 font-medium">No pending users</p>
+          <p className="text-slate-500 text-sm mt-1">New registrations will appear here awaiting your approval.</p>
         </div>
       )}
 
@@ -112,11 +112,11 @@ export default function AdminPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-700/50 text-xs text-slate-400 uppercase tracking-wide">
-                <th className="px-4 py-3 text-left">用户</th>
-                <th className="px-4 py-3 text-left">租户</th>
-                <th className="px-4 py-3 text-left">注册时间</th>
-                <th className="px-4 py-3 text-left w-36">初始额度 (USD)</th>
-                <th className="px-4 py-3 text-right">操作</th>
+                <th className="px-4 py-3 text-left">User</th>
+                <th className="px-4 py-3 text-left">Tenant</th>
+                <th className="px-4 py-3 text-left">Registered At</th>
+                <th className="px-4 py-3 text-left w-36">Initial Credit (USD)</th>
+                <th className="px-4 py-3 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700/30">
@@ -142,14 +142,14 @@ export default function AdminPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-400 text-xs">
-                    {u.created_at ? new Date(u.created_at).toLocaleString("zh-CN") : "—"}
+                    {u.created_at ? new Date(u.created_at).toLocaleString() : "—"}
                   </td>
                   <td className="px-4 py-3">
                     <input
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="留空=无限"
+                      placeholder="Leave blank = unlimited"
                       value={credits[u.id] ?? ""}
                       onChange={(e) => setCredits((p) => ({ ...p, [u.id]: e.target.value }))}
                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500"
@@ -157,14 +157,14 @@ export default function AdminPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     {approved[u.id] ? (
-                      <span className="text-emerald-400 text-xs font-medium">✓ 已审批</span>
+                      <span className="text-emerald-400 text-xs font-medium">✓ Approved</span>
                     ) : (
                       <button
                         onClick={() => handleApprove(u.id)}
                         disabled={approving[u.id]}
                         className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium transition-colors"
                       >
-                        {approving[u.id] ? "处理中…" : "审批通过"}
+                        {approving[u.id] ? "Processing…" : "Approve"}
                       </button>
                     )}
                   </td>

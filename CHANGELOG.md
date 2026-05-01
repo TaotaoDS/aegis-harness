@@ -2,6 +2,79 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] — 2026-05-01
+
+### AI Workspace — Knowledge Graph + Generative Chat
+
+New primary interface at `/knowledge` combining an interactive knowledge graph,
+document ingestion, and a generative chat assistant.
+
+**Knowledge Graph (`KnowledgeGraph.tsx`)**
+- Upload PDFs / TXT files or crawl URLs — each document becomes a graph node
+- LLM extracts 5–10 key concepts per document, creating concept nodes linked to the source
+- Auto-linking: semantic similarity creates `related_concept` and `semantically_related` edges
+- Interactive D3.js graph: pan, zoom, click nodes to set chat context
+
+**Generative Chat (WorkspaceChat)**
+- Type `/task <requirement>` to launch a full multi-agent pipeline inline
+- `TaskCard` renders live SSE progress directly in the chat stream
+- `InlineInterviewCard`: CEO interview questions appear inline — no page navigation
+- `InlineApprovalCard`: HITL approval requests appear inline — no modal overlay
+- SSE dedup guard prevents duplicate cards on reconnect
+
+### Chat Session Persistence
+
+All conversations are now persisted in PostgreSQL.
+
+- New migration `011_chat_sessions.py` creates `chat_sessions` + `chat_messages` tables
+- `GET /knowledge/sessions` and `GET /knowledge/sessions/{id}` endpoints
+- `HistoryDrawer` component: slide-in panel to browse and restore past sessions
+- `currentSessionId` state tracks the active session across page reloads
+- `/knowledge/chat` endpoint auto-creates or resumes a session and persists every message
+
+### OpenRouter Integration
+
+OpenRouter is now a first-class provider: one API key unlocks 300+ models.
+
+- 10 new model definitions in `models_config.yaml` (Claude Sonnet/Opus, GPT-4o,
+  Gemini Flash/Pro, Llama 3.3 70B, DeepSeek V3/R1, Qwen 2.5 72B, Mistral Large)
+- All use `provider: openai` with `base_url: https://openrouter.ai/api/v1`
+- `OPENROUTER_API_KEY` added to `.env.example` and the onboarding provider list
+- Listed first in the Settings → API Keys tab as the recommended starting point
+
+### Transparent 401 Recovery
+
+The Next.js proxy at `/api/proxy/[...path]/route.ts` now implements automatic
+token refresh and retry.
+
+- Request body buffered via `req.arrayBuffer()` to allow replay after refresh
+- On 401: `POST /auth/refresh` is called; on success the original request is retried
+  with merged cookies; on failure `X-Auth-Expired: true` header is returned
+- `sessionGuard.ts`: global `window.fetch` interceptor dispatches `aegis:session-expired`
+  DOM events when the `X-Auth-Expired` header is detected
+- `SessionExpiredModal.tsx`: re-login overlay that appears without clearing page state
+- `AuthProvider` in `context.tsx` installs the guard on mount and listens for events
+
+### API Key → Environment Bridge
+
+`api/key_injector.py` bridges DB-stored keys into `os.environ` at runtime.
+
+- Called from `/settings` save endpoint, `/knowledge/chat`, and `job_runner.py`
+- Supports 11 provider mappings: OpenRouter, Anthropic, OpenAI, NVIDIA, DeepSeek,
+  Zhipu, Moonshot, Google, Groq, xAI, Together
+- No restart required after updating keys in the Settings UI
+
+### UI & Internationalization
+
+- All Chinese hardcoded strings in source files translated to English
+- Event labels in `api/event_labels.py` and `web/lib/eventLabels.ts` translated to English
+- HITL action/reason strings in `api/hitl_manager.py` translated to English
+- Admin, console, onboarding, and pending pages fully translated
+- App title updated to "AegisHarness · AI Workspace"
+- `historyDrawer` and `sessionExpired` i18n namespaces added to `en.ts` + `zh.ts`
+
+---
+
 ## [0.0.2] — 2026-04-24
 
 ### Onboarding Wizard — Complete Redesign

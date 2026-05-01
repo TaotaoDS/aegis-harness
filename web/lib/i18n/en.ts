@@ -45,6 +45,10 @@ export const en: Translations = {
     taskCreating: (kind: string) => `🚀 Creating ${kind} task…`,
     taskCreateFailed: (err: string) => `⚠️ Failed to create task: ${err}`,
     chatRequestFailed: (err: string) => `⚠️ Request failed: ${err}`,
+    editMessage: "Edit",
+    editCancel: "Cancel",
+    editSubmit: "Resend",
+    editRetrying: "Retrying…",
     greeting:
       "Welcome to AI Workspace! 👋\n\n" +
       "• Type a question → answered from the knowledge graph\n" +
@@ -124,6 +128,11 @@ export const en: Translations = {
     loadError: "Failed to load task list",
     retryBtn: "Retry",
     backendHint: "Check that the backend is running on port 8000",
+    deleteBtn: "Delete",
+    deleteConfirm: "Delete this task and all its events and checkpoints? This cannot be undone.",
+    deleteSuccess: "Task deleted",
+    deleteFailed: (e: string) => `Delete failed: ${e}`,
+    deleting: "Deleting…",
   },
 
   jobNew: {
@@ -160,6 +169,10 @@ export const en: Translations = {
     completed: (n: number) => `Done · ${n} event${n === 1 ? "" : "s"} total`,
     executionLog: "Execution Log",
     loading: "Loading…",
+    deleteBtn: "Delete Task",
+    deleteConfirm: "Delete this task and all its events and checkpoints? This cannot be undone.",
+    deleteFailed: (e: string) => `Delete failed: ${e}`,
+    deleting: "Deleting…",
   },
 
   chat: {
@@ -357,6 +370,42 @@ export const en: Translations = {
     confidenceHint: "The pipeline resumes automatically once CEO confidence reaches 95%",
     submitting: "Submitting…",
     submit: "↩ Submit Answer",
+  },
+
+  sessionExpired: {
+    title:      "Session Expired",
+    subtitle:   "Your login token has expired. Sign in again to continue — your current state is preserved.",
+    email:      "Email",
+    password:   "Password",
+    signIn:     "Sign In",
+    signingIn:  "Signing in…",
+    loginFailed: "Login failed. Please check your email and password.",
+  },
+
+  historyDrawer: {
+    title:       "History",
+    empty:       "No previous sessions",
+    loading:     "Loading…",
+    loadFailed:  "Failed to load. Please retry.",
+    newSession:  "+ New Chat",
+    msgCount:    (n: number) => `${n} messages`,
+    loadSession: "Restore session",
+  },
+
+  inlineCards: {
+    answered: "Answered",
+    approved: "Approved",
+    rejected: "Rejected",
+    expired: "Expired",
+    answerPlaceholder: "Type your answer…",
+    submitAnswer: "Submit",
+    submitting: "Submitting…",
+    approveBtn: "Approve",
+    rejectBtn: "Reject",
+    notePlaceholder: "Notes (optional)",
+    interviewTitle: "CEO Interview",
+    approvalTitle: "Approval Required",
+    pipelineWaiting: "Pipeline waiting…",
   },
 
   timeline: {

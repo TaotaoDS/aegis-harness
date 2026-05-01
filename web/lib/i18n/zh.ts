@@ -49,6 +49,10 @@ export const zh = {
     taskCreating: (kind: string) => `🚀 正在创建${kind}任务…`,
     taskCreateFailed: (err: string) => `⚠️ 创建任务失败：${err}`,
     chatRequestFailed: (err: string) => `⚠️ 请求失败：${err}`,
+    editMessage: "编辑",
+    editCancel: "取消",
+    editSubmit: "重新发送",
+    editRetrying: "重新提交中…",
     greeting:
       "欢迎来到智控空间！👋\n\n" +
       "• 直接提问 → 基于知识图谱回答\n" +
@@ -134,6 +138,11 @@ export const zh = {
     loadError: "加载任务列表失败",
     retryBtn: "重试",
     backendHint: "请确认后端服务在 port 8000 正常运行",
+    deleteBtn: "删除",
+    deleteConfirm: "确定要删除此任务及其所有事件和检查点吗？此操作不可撤销。",
+    deleteSuccess: "任务已删除",
+    deleteFailed: (e: string) => `删除失败：${e}`,
+    deleting: "删除中…",
   },
 
   jobNew: {
@@ -168,6 +177,10 @@ export const zh = {
     completed: (n: number) => `已完成 · 共 ${n} 个事件`,
     executionLog: "执行日志",
     loading: "加载中…",
+    deleteBtn: "删除任务",
+    deleteConfirm: "确定要删除此任务及其所有事件和检查点吗？此操作不可撤销。",
+    deleteFailed: (e: string) => `删除失败：${e}`,
+    deleting: "删除中…",
   },
 
   chat: {
@@ -360,6 +373,42 @@ export const zh = {
     confidenceHint: "CEO 置信度达到 95% 后将自动进入规划阶段",
     submitting: "提交中…",
     submit: "↩ 提交回答",
+  },
+
+  sessionExpired: {
+    title:      "会话已过期",
+    subtitle:   "你的登录令牌已失效，请重新登录以继续（当前页面状态不会丢失）",
+    email:      "邮箱",
+    password:   "密码",
+    signIn:     "重新登录",
+    signingIn:  "登录中…",
+    loginFailed: "登录失败，请检查邮箱和密码",
+  },
+
+  historyDrawer: {
+    title:       "历史会话",
+    empty:       "暂无历史会话",
+    loading:     "加载中…",
+    loadFailed:  "加载失败，请重试",
+    newSession:  "+ 新对话",
+    msgCount:    (n: number) => `${n} 条消息`,
+    loadSession: "恢复此会话",
+  },
+
+  inlineCards: {
+    answered: "已回答",
+    approved: "已批准",
+    rejected: "已拒绝",
+    expired: "已过期",
+    answerPlaceholder: "输入你的回答…",
+    submitAnswer: "提交",
+    submitting: "提交中…",
+    approveBtn: "批准",
+    rejectBtn: "拒绝",
+    notePlaceholder: "备注（可选）",
+    interviewTitle: "CEO 访谈",
+    approvalTitle: "需要审批",
+    pipelineWaiting: "流水线等待中…",
   },
 
   timeline: {
