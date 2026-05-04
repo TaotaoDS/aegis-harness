@@ -469,6 +469,77 @@ def run_update_mode(
     return status
 
 
+# ---------------------------------------------------------------------------
+# Fusion analysis (cross-repository architecture synthesis)
+# ---------------------------------------------------------------------------
+
+def run_fusion_analysis(
+    *,
+    repos: List[Dict],
+    analysis_goal: str,
+    workspace_id: str = "fusion",
+    tool_llm=None,
+    bus=None,
+) -> Optional["FusionReport"]:  # type: ignore[name-defined]
+    """Run FusionArchitectAgent from the CLI.
+
+    Parameters
+    ----------
+    repos:
+        List of dicts, each with:
+        - git_url (required)
+        - dest_name (required)
+        - auth_token (optional)
+        - branch (optional)
+        - depth (optional: shallow clone depth)
+    analysis_goal:
+        Natural-language description of what to focus on.
+    workspace_id:
+        Name for the local workspace directory.
+    tool_llm:
+        Pre-built tool-calling LLM callable. If None, loaded from models_config.yaml.
+    bus:
+        Optional event bus for progress events.
+
+    Returns
+    -------
+    FusionReport or None if the LLM did not produce a report.
+    """
+    from core_orchestrator.fusion_architect_agent import FusionArchitectAgent
+
+    if tool_llm is None:
+        tool_llm = _make_tool_llm_from_text_llm(_load_default_llm())
+
+    repos_root = WORKSPACE_ROOT / workspace_id / "_workspace" / "repos"
+    repos_root.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[Fusion] Goal: {analysis_goal}")
+    print(f"[Fusion] Repos: {len(repos)}")
+    for r in repos:
+        token_hint = " (with auth)" if r.get("auth_token") else ""
+        print(f"  - {r['dest_name']}: {r['git_url']}{token_hint}")
+
+    agent = FusionArchitectAgent(
+        tool_llm      = tool_llm,
+        repos_root    = repos_root,
+        analysis_goal = analysis_goal,
+        bus           = bus,
+    )
+    report = agent.run(repos=repos)
+
+    if report is None:
+        print("[Fusion] No report produced — LLM did not call write_fusion_report.")
+        return None
+
+    print(f"\n[Fusion] Report: {report.title}")
+    print(f"  Repos analysed: {', '.join(report.repos_analyzed)}")
+    if report.skill_path:
+        print(f"  Skill saved:    {report.skill_path}")
+    else:
+        print("  Skill save:     skipped (see logs)")
+    return report
+
+
 def _print_summary(status: Dict, ws_id: str) -> None:
     print("\n" + "=" * 60)
     print("  Pipeline Complete")

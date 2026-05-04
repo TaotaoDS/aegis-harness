@@ -48,11 +48,17 @@ _TAG_TO_CATEGORY: Dict[str, str] = {
     "kubernetes": "devops",
     "nginx":      "devops",
     "ci":         "devops",
-    "database":   "database",
-    "sql":        "database",
-    "postgres":   "database",
-    "mysql":      "database",
-    "redis":      "database",
+    "database":    "database",
+    "sql":         "database",
+    "postgres":    "database",
+    "mysql":       "database",
+    "redis":       "database",
+    "architecture": "architecture",
+    "fusion":       "architecture",
+    "design":       "architecture",
+    "pattern":      "architecture",
+    "microservice": "architecture",
+    "monolith":     "architecture",
 }
 
 

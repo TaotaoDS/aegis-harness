@@ -284,6 +284,8 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
         if job.type == "update":
             _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl,
                         sanitizer, router, loop=loop)
+        elif job.type == "fusion":
+            _run_fusion(job, ws, ws_id, tool_llm, bus, loop=loop)
         else:
             _run_build(job, ws, ws_id, gateway, tool_llm, bus,
                        sanitizer, router, loop=loop)
@@ -519,6 +521,68 @@ def _run_execution(
         _write_checkpoint(ws, ws_id, loop, job.id, "execution_complete",
                           completed_tasks=completed,
                           extra={"passed": passed, "escalated": escalated})
+
+
+# ---------------------------------------------------------------------------
+# Fusion pipeline (cross-repository architecture analysis)
+# ---------------------------------------------------------------------------
+
+def _run_fusion(job, ws, ws_id, tool_llm, bus, *, loop) -> None:
+    """Run FusionArchitectAgent for cross-repo analysis.
+
+    The job.requirement field carries a JSON payload:
+        {
+            "analysis_goal": "Compare auth strategies ...",
+            "repos": [
+                {"git_url": "https://...", "dest_name": "repo-a"},
+                {"git_url": "https://...", "dest_name": "repo-b", "auth_token": "..."}
+            ]
+        }
+    """
+    import json as _json
+    from core_orchestrator.fusion_architect_agent import FusionArchitectAgent
+
+    try:
+        config = _json.loads(job.requirement)
+    except Exception:
+        # Treat plain string as the analysis goal with no repos pre-specified
+        config = {"analysis_goal": job.requirement, "repos": []}
+
+    analysis_goal = config.get("analysis_goal", job.requirement)
+    repos         = config.get("repos", [])
+
+    # Repos are cloned into an isolated subdirectory of the job workspace
+    repos_root = _HARNESS_ROOT / "workspaces" / ws_id / "_workspace" / "repos"
+    repos_root.mkdir(parents=True, exist_ok=True)
+
+    bus.emit("fusion.start", repo_count=len(repos), goal=analysis_goal)
+    _write_checkpoint(ws, ws_id, loop, job.id, "fusion_start",
+                      extra={"repo_count": len(repos)})
+
+    agent = FusionArchitectAgent(
+        tool_llm      = tool_llm,
+        repos_root    = repos_root,
+        analysis_goal = analysis_goal,
+        bus           = bus,
+    )
+    report = agent.run(repos=repos)
+
+    if report is not None:
+        bus.emit(
+            "fusion.complete",
+            title      = report.title,
+            skill_id   = report.skill_id,
+            skill_path = report.skill_path,
+        )
+        _write_checkpoint(ws, ws_id, loop, job.id, "fusion_complete",
+                          extra={
+                              "title":      report.title,
+                              "skill_id":   report.skill_id,
+                              "skill_path": report.skill_path,
+                          })
+    else:
+        bus.emit("fusion.no_report")
+        _write_checkpoint(ws, ws_id, loop, job.id, "fusion_no_report")
 
 
 # ---------------------------------------------------------------------------

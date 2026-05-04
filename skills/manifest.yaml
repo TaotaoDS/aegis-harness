@@ -1,1 +1,13 @@
-skills: []
+skills:
+- category: python
+  created_from: reflection
+  file: skills/python/cross-repo-fusion-test-fusion-architectu.md
+  id: cross-repo-fusion-test-fusion-architectu
+  name: 'Cross-repo fusion: Test Fusion Architecture'
+  source_solution: 64fdf02e
+  triggers:
+  - python
+  - fastapi
+  - architecture
+  - fusion
+  version: 1
