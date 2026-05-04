@@ -40,6 +40,9 @@ from core_orchestrator.knowledge_manager import KnowledgeManager
 from core_orchestrator.solution_store import SolutionStore
 from core_orchestrator.reflection_agent import ReflectionAgent
 from core_orchestrator.event_bus import EventBus, NullBus, bus_from_workspace
+from core_orchestrator.skill_loader import SkillLoader
+
+_PROJECT_ROOT = Path(__file__).parent
 
 
 WORKSPACE_ROOT = Path(__file__).parent / "workspaces"
@@ -128,6 +131,7 @@ def run_interview_loop(
     ceo: CEOAgent,
     requirement: str,
     solutions_context: str = "",
+    skill_loader=None,
 ) -> None:
     """Drive the CEO through interview (95% confidence) → plan → delegate-ready.
 
@@ -145,7 +149,7 @@ def run_interview_loop(
             print(f"[CEO] Confidence: {conf}%")
 
     print(f"\n[CEO] Interview complete (confidence: {ceo.confidence}%). Generating plan...")
-    plan = ceo.create_plan(solutions_context=solutions_context)
+    plan = ceo.create_plan(solutions_context=solutions_context, skill_loader=skill_loader)
 
     task_count = len(plan.get("tasks", []))
     print(f"[CEO] Plan created with {task_count} task(s).")
@@ -176,6 +180,7 @@ def run_execution(
     escalated_tool_llm=None,
     bus=None,
     solutions_context: str = "",
+    skill_loader=None,
 ) -> Dict:
     """Run Architect + Evaluator + QA on all delegated tasks via ResilienceManager.
 
@@ -198,6 +203,8 @@ def run_execution(
     km = KnowledgeManager(workspace=workspace, workspace_id=workspace_id)
     knowledge_ctx = km.load_knowledge()
 
+    _skill_loader = skill_loader or SkillLoader(project_root=_PROJECT_ROOT)
+
     rm = ResilienceManager(
         workspace=workspace,
         workspace_id=workspace_id,
@@ -212,6 +219,7 @@ def run_execution(
         solutions_context=solutions_context,
         bus=bus,
         escalated_tool_llm=_esc_tool_llm,
+        skill_loader=_skill_loader,
     )
 
     print("\n[Execution] Running Architect + Evaluator + QA pipeline...")
@@ -393,8 +401,10 @@ def run_update_mode(
     if solutions_ctx:
         print(f"[Solutions] Loaded {solution_store.count()} lesson(s) from workspace.\n")
 
+    _skill_loader = SkillLoader(project_root=_PROJECT_ROOT)
     print(f"\n[Update] Analyzing existing codebase and planning changes...")
-    plan = ceo.plan_update(requirement, solutions_context=solutions_ctx)
+    plan = ceo.plan_update(requirement, solutions_context=solutions_ctx,
+                           skill_loader=_skill_loader)
 
     tasks = plan.get("tasks", [])
     if not tasks:
@@ -432,6 +442,7 @@ def run_update_mode(
         knowledge_context=knowledge_ctx,
         solutions_context=solutions_ctx,
         bus=bus,
+        skill_loader=_skill_loader,
     )
 
     # Only run the newly generated tasks (not all tasks)
@@ -573,7 +584,8 @@ def main() -> None:
         if solutions_ctx:
             print(f"[Solutions] Loaded {solution_store.count()} lesson(s) from workspace.\n")
 
-        run_interview_loop(ceo, requirement, solutions_context=solutions_ctx)
+        run_interview_loop(ceo, requirement, solutions_context=solutions_ctx,
+                           skill_loader=SkillLoader(project_root=_PROJECT_ROOT))
         save_checkpoint(ws, ws_id, stage="interviewed", requirement=requirement)
         print("[Checkpoint] Saved: interviewed\n")
     else:
@@ -613,6 +625,7 @@ def main() -> None:
             workspace_id=ws_id,
             bus=bus,
             solutions_context=solutions_ctx,
+            skill_loader=SkillLoader(project_root=_PROJECT_ROOT),
         )
         save_checkpoint(ws, ws_id, stage="executed",
                         requirement=requirement, execution_status=status)

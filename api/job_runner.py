@@ -349,9 +349,13 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
 def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router, *, loop):
     from core_orchestrator.ceo_agent import CEOAgent
     from core_orchestrator.solution_store import SolutionStore
+    from core_orchestrator.skill_loader import SkillLoader
 
     # ── Load workspace solutions (Compound Learning injection) ───────────
     solutions_ctx = SolutionStore(ws, ws_id).format_as_context()
+
+    # ── SkillLoader (progressive disclosure) ─────────────────────────────
+    skill_loader = SkillLoader(project_root=_HARNESS_ROOT)
 
     # ── Resolve user profile ──────────────────────────────────────────────
     user_profile = None
@@ -389,9 +393,9 @@ def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router, *, loo
     _write_checkpoint(ws, ws_id, loop, job.id, "interview_complete",
                       extra={"confidence": ceo.confidence})
 
-    # ── CEO planning (with lessons injected) ────────────────────────────
+    # ── CEO planning (with lessons + skills injected) ───────────────────
     bus.emit("ceo.planning")
-    plan  = ceo.create_plan(solutions_context=solutions_ctx)
+    plan  = ceo.create_plan(solutions_context=solutions_ctx, skill_loader=skill_loader)
     tasks = plan.get("tasks", [])
     bus.emit("ceo.plan_created", tasks=tasks, task_count=len(tasks))
 
@@ -407,7 +411,7 @@ def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router, *, loo
 
     _run_execution(job, ws, ws_id, tool_llm, bus, sanitizer, router,
                    hitl=job.hitl_manager, solutions_ctx=solutions_ctx,
-                   loop=loop)
+                   loop=loop, skill_loader=skill_loader)
 
 
 # ---------------------------------------------------------------------------
@@ -417,15 +421,18 @@ def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router, *, loo
 def _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl, sanitizer, router, *, loop):
     from core_orchestrator.ceo_agent import CEOAgent
     from core_orchestrator.solution_store import SolutionStore
+    from core_orchestrator.skill_loader import SkillLoader
 
     solutions_ctx = SolutionStore(ws, ws_id).format_as_context()
+    skill_loader  = SkillLoader(project_root=_HARNESS_ROOT)
 
     ceo = CEOAgent(gateway=gateway, workspace=ws, workspace_id=ws_id)
 
     bus.emit("pipeline.update_start", workspace=ws_id)
     _write_checkpoint(ws, ws_id, loop, job.id, "update_planning")
 
-    plan  = ceo.plan_update(job.requirement, solutions_context=solutions_ctx)
+    plan  = ceo.plan_update(job.requirement, solutions_context=solutions_ctx,
+                             skill_loader=skill_loader)
     tasks = plan.get("tasks", [])
 
     if not tasks:
@@ -452,7 +459,8 @@ def _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl, sanitizer, router,
                    task_ids=task_ids,
                    hitl=hitl,
                    solutions_ctx=solutions_ctx,
-                   loop=loop)
+                   loop=loop,
+                   skill_loader=skill_loader)
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +473,7 @@ def _run_execution(
     hitl: Optional[HITLManager] = None,
     solutions_ctx: str = "",
     loop: Optional[asyncio.AbstractEventLoop] = None,
+    skill_loader=None,
 ):
     from core_orchestrator.llm_gateway import LLMGateway
     from core_orchestrator.resilience_manager import ResilienceManager
@@ -489,6 +498,7 @@ def _run_execution(
         solutions_context=solutions_ctx,    # ← Compound Learning injection
         bus=bus,
         hitl_manager=hitl,
+        skill_loader=skill_loader,          # ← Skill progressive disclosure
     )
 
     results  = [rm.run_task_loop(tid) for tid in task_ids] if task_ids else rm.run_all()

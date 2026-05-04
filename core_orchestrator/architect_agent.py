@@ -98,6 +98,8 @@ You are a senior software architect who writes production code.
 {knowledge_context}
 {plan_context}
 
+{skills_context}
+
 {solutions_context}
 
 ## TOOL USE -- MANDATORY
@@ -154,6 +156,7 @@ class ArchitectAgent:
         bus=None,
         hitl_manager=None,
         enable_web_tools: bool = False,
+        skill_loader=None,
     ):
         from .event_bus import NullBus
         self._tool_llm = tool_llm
@@ -164,6 +167,7 @@ class ArchitectAgent:
         self._bus = bus or NullBus()
         self._hitl_manager = hitl_manager   # Optional HITLManager for sensitive-file gates
         self._enable_web_tools = enable_web_tools
+        self._skill_loader = skill_loader    # Optional SkillLoader for progressive disclosure
 
     # --- File tools (workspace-scoped) ---
 
@@ -360,6 +364,15 @@ class ArchitectAgent:
         if has_existing_code:
             codebase_context = _UPDATE_ADDENDUM + "\n" + codebase_context
 
+        # Progressive skill disclosure: match task → load relevant Markdown recipes
+        skills_context = ""
+        if self._skill_loader is not None:
+            try:
+                self._skill_loader.reload_manifest()
+                skills_context = self._skill_loader.load_matched(task_content, top_k=3)
+            except Exception:
+                skills_context = ""
+
         system_prompt = _SOLVE_SYSTEM.format(
             plan_context=plan_context,
             task_content=task_content,
@@ -367,6 +380,7 @@ class ArchitectAgent:
             feedback_context=feedback_context,
             codebase_context=codebase_context,
             solutions_context=self._solutions_context or "",
+            skills_context=skills_context,
         )
 
         # Select tools: always write_file; add read_file when codebase exists;

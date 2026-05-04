@@ -119,6 +119,8 @@ _PLAN_SYSTEM = """\
 You are a senior technical project manager. Decompose the following
 requirement into concrete, actionable sub-tasks.
 
+{skills_context}
+
 {solutions_context}
 
 Requirement: {requirement}
@@ -164,6 +166,8 @@ _UPDATE_PLAN_SYSTEM = """\
 You are a senior technical project manager performing an UPDATE to an
 existing project. You must generate focused, incremental tasks to modify
 or fix the existing codebase.
+
+{skills_context}
 
 {solutions_context}
 
@@ -350,20 +354,33 @@ class CEOAgent:
 
     # ── Plan ─────────────────────────────────────────────────────────────
 
-    def create_plan(self, solutions_context: str = "") -> dict:
+    def create_plan(self, solutions_context: str = "", skill_loader=None) -> dict:
         """Decompose the requirement into sub-tasks and write plan.md.
 
         Args:
             solutions_context: Formatted lessons from SolutionStore.
                                Pass "" when no history exists yet.
+            skill_loader:      Optional SkillLoader for progressive disclosure.
+                               When provided, matched skills are injected before
+                               solutions_context in the planning prompt.
         """
         self._require_state("planning")
+
+        # Progressive skill disclosure for planning
+        skills_context = ""
+        if skill_loader is not None:
+            try:
+                skill_loader.reload_manifest()
+                skills_context = skill_loader.load_matched(self._requirement, top_k=3)
+            except Exception:
+                skills_context = ""
 
         interview_log = self._format_qa_context()
         prompt = _PLAN_SYSTEM.format(
             requirement=self._requirement,
             interview_log=interview_log,
             solutions_context=solutions_context or _NO_SOLUTIONS,
+            skills_context=skills_context,
         )
         result = self._gateway.send(prompt)
         self._plan = parse_llm_json(
@@ -428,12 +445,13 @@ class CEOAgent:
                     max_num = max(max_num, int(m.group(1)))
         return max_num + 1
 
-    def plan_update(self, requirement: str, solutions_context: str = "") -> dict:
+    def plan_update(self, requirement: str, solutions_context: str = "", skill_loader=None) -> dict:
         """Generate incremental update/fix tasks based on existing codebase.
 
         Args:
             requirement:      The change/fix description.
             solutions_context: Formatted lessons from SolutionStore.
+            skill_loader:      Optional SkillLoader for progressive disclosure.
 
         Transitions: idle -> delegating
         """
@@ -449,12 +467,22 @@ class CEOAgent:
         file_listing = self._scan_deliverables()
         next_num = self._next_task_id()
 
+        # Progressive skill disclosure for update planning
+        skills_context = ""
+        if skill_loader is not None:
+            try:
+                skill_loader.reload_manifest()
+                skills_context = skill_loader.load_matched(requirement, top_k=3)
+            except Exception:
+                skills_context = ""
+
         prompt = _UPDATE_PLAN_SYSTEM.format(
             file_listing=file_listing,
             requirement=requirement,
             next_task_id=f"task_{next_num}",
             next_task_num=next_num,
             solutions_context=solutions_context or _NO_SOLUTIONS,
+            skills_context=skills_context,
         )
         result = self._gateway.send(prompt)
         self._plan = parse_llm_json(

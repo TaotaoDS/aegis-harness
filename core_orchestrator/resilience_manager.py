@@ -66,6 +66,7 @@ class ResilienceManager:
         hitl_manager=None,
         parallel_workers: int = _DEFAULT_PARALLEL_WORKERS,
         judge: Optional[LLMJudge] = None,
+        skill_loader=None,
     ):
         from .event_bus import NullBus
         self._workspace = workspace
@@ -84,6 +85,7 @@ class ResilienceManager:
         self._hitl_manager = hitl_manager   # Optional HITLManager forwarded to ArchitectAgent
         self._parallel_workers = max(1, int(parallel_workers))
         self._judge = judge                 # Optional LLM-as-Judge for post-QA scoring
+        self._skill_loader = skill_loader   # Optional SkillLoader for progressive disclosure
         self._lock = threading.Lock()       # guards _token_usage and _results
         self._token_usage = 0
         self._results: List[Dict] = []
@@ -223,6 +225,7 @@ class ResilienceManager:
                 solutions_context=self._solutions_context,
                 bus=self._bus,
                 hitl_manager=self._hitl_manager,
+                skill_loader=self._skill_loader,
             )
             try:
                 architect.solve_task(task_file)
