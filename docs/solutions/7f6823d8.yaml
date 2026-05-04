@@ -1,0 +1,8 @@
+context: FastAPI app on port 8000
+job_id: myjob99
+problem: Missing CORS header caused 403 in production
+solution: Add CORSMiddleware with allow_origins=['*'] for dev
+tags:
+- python
+- cors
+type: error_fix

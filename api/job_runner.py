@@ -247,10 +247,28 @@ def _run_pipeline(job: JobRecord, loop: asyncio.AbstractEventLoop) -> None:
 
         llm      = router.as_llm()
         gateway  = LLMGateway(sanitizer=sanitizer, llm=llm)
-        tool_llm = router.as_tool_llm()
 
         ws_root = _HARNESS_ROOT / "workspaces"
         ws = WorkspaceManager(ws_root, isolated=True)
+
+        # Deep context compaction: create Layer 1 (tool output eviction) and
+        # Layer 2 (LLM-powered conversation summarization) objects.
+        from core_orchestrator.tool_output_store import ToolOutputStore
+        from core_orchestrator.context_summarizer import ContextSummarizer
+
+        _tool_store = ToolOutputStore(
+            workspace_path=str(ws_root),
+            workspace_id=job.workspace_id,
+        )
+        _ctx_summarizer = ContextSummarizer(
+            llm_callable=llm,
+            max_summary_tokens=500,
+            context_window=128_000,
+        )
+        tool_llm = router.as_tool_llm(
+            tool_output_store=_tool_store,
+            context_summarizer=_ctx_summarizer,
+        )
         ws_id = job.workspace_id
         if not ws.exists(ws_id):
             ws.create(ws_id)

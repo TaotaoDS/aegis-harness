@@ -12,14 +12,22 @@ Design notes:
 - The agent is stateless: one call to reflect() per pipeline run.
 - The LLM response is expected to be strict JSON (no fences).
 - Gracefully returns 0 on any LLM / parse failure (never crashes pipeline).
+- Enhanced compound knowledge: extracts symptoms, failed_attempts, root_cause
+  for richer searchability in future retrievals.
 """
 
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import yaml
 
 from .json_parser import parse_llm_json
 from .llm_gateway import LLMGateway
 from .solution_store import SolutionStore
 from .workspace_manager import WorkspaceManager
+
+_GLOBAL_SOLUTIONS_DIR = Path(__file__).parent.parent / "docs" / "solutions"
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +66,10 @@ Respond in strict JSON (no markdown fences):
   {{
     "type": "error_fix",
     "problem": "Short description of what went wrong (≤ 120 chars)",
+    "symptoms": "Observable indicators that this issue is occurring (≤ 150 chars)",
+    "failed_attempts": "Approaches tried that did NOT work (≤ 200 chars)",
     "solution": "What fixed it / should be done instead (≤ 200 chars)",
+    "root_cause": "Why the problem occurred at a fundamental level (≤ 150 chars)",
     "context": "Relevant code/config/tool detail — optional (≤ 150 chars)",
     "tags": ["python", "auth"]
   }}
@@ -160,6 +171,17 @@ class ReflectionAgent:
                 bus.emit("reflection.complete", saved=0)
             return 0
 
+    @staticmethod
+    def _persist_global(sol_id: str, lesson: Dict[str, Any]) -> None:
+        """Persist lesson to docs/solutions/ for cross-workspace retrieval."""
+        try:
+            _GLOBAL_SOLUTIONS_DIR.mkdir(parents=True, exist_ok=True)
+            filepath = _GLOBAL_SOLUTIONS_DIR / f"{sol_id}.yaml"
+            with open(filepath, "w", encoding="utf-8") as f:
+                yaml.safe_dump(lesson, f, allow_unicode=True, default_flow_style=False)
+        except Exception:
+            pass
+
     def _do_reflect(
         self,
         events_log: List[Dict[str, Any]],
@@ -195,6 +217,9 @@ class ReflectionAgent:
 
             sol_id = self._store.save(lesson)
             saved += 1
+
+            # Also persist to global docs/solutions/ for cross-workspace retrieval
+            self._persist_global(sol_id, lesson)
 
             if bus:
                 bus.emit(

@@ -23,6 +23,7 @@ import tiktoken
 from .architect_agent import ArchitectAgent, ToolLLM
 from .context_compressor import compress_task_progress
 from .evaluator import Evaluator, EvalResult
+from .judge import LLMJudge
 from .knowledge_manager import KnowledgeManager
 from .llm_gateway import LLMGateway
 from .parallel_executor import ParallelExecutor
@@ -64,6 +65,7 @@ class ResilienceManager:
         escalated_tool_llm: Optional[ToolLLM] = None,
         hitl_manager=None,
         parallel_workers: int = _DEFAULT_PARALLEL_WORKERS,
+        judge: Optional[LLMJudge] = None,
     ):
         from .event_bus import NullBus
         self._workspace = workspace
@@ -81,6 +83,7 @@ class ResilienceManager:
         self._bus = bus or NullBus()
         self._hitl_manager = hitl_manager   # Optional HITLManager forwarded to ArchitectAgent
         self._parallel_workers = max(1, int(parallel_workers))
+        self._judge = judge                 # Optional LLM-as-Judge for post-QA scoring
         self._lock = threading.Lock()       # guards _token_usage and _results
         self._token_usage = 0
         self._results: List[Dict] = []
@@ -129,6 +132,21 @@ class ResilienceManager:
             fix_description=f"Resolved after {attempts} attempts with escalation.",
             avoidance_guide=f"Review feedback patterns from {task_id} before similar tasks.",
         )
+
+    def _read_artifact(self, task_id: str, written_files: List[str]) -> str:
+        """Read artifact content for Judge evaluation (combines written files)."""
+        parts = []
+        for filepath in written_files[:10]:
+            read_path = (
+                filepath if filepath.startswith("deliverables/")
+                else f"deliverables/{filepath}"
+            )
+            try:
+                content = self._workspace.read(self._ws_id, read_path)
+                parts.append(f"--- {filepath} ---\n{content[:2000]}")
+            except Exception:
+                parts.append(f"--- {filepath} --- (unreadable)")
+        return "\n\n".join(parts)[:8000]
 
     def run_task_loop(self, task_id: str) -> Dict:
         """Run the Architect → Evaluator → QA loop for a single task."""
@@ -331,6 +349,47 @@ class ResilienceManager:
                     attempt=attempt,
                     escalation_level=escalation_level,
                 )
+
+                # LLM-as-Judge gate: score output before declaring success
+                if self._judge:
+                    try:
+                        task_content = self._workspace.read(self._ws_id, task_file)
+                    except Exception:
+                        task_content = task_id
+                    artifact_content = self._read_artifact(task_id, written_files)
+                    verdict = self._judge.evaluate(
+                        task=task_content,
+                        output=artifact_content,
+                    )
+                    self._bus.emit(
+                        "judge.evaluated",
+                        task_id=task_id,
+                        overall_score=verdict.overall_score,
+                        passed=verdict.passed,
+                    )
+                    if not verdict.passed:
+                        judge_feedback = (
+                            f"# Judge Feedback: {task_id}\n\n"
+                            f"**Score:** {verdict.overall_score:.2f} "
+                            f"(threshold: {self._judge._threshold})\n"
+                            f"**Hallucination:** {verdict.hallucination_score:.2f}\n"
+                            f"**Accuracy:** {verdict.accuracy_score:.2f}\n"
+                            f"**Relevance:** {verdict.relevance_score:.2f}\n\n"
+                            f"## Reasoning\n{verdict.reasoning}\n\n"
+                            f"---\n*Address the quality issues above and resubmit.*\n"
+                        )
+                        self._workspace.write(
+                            self._ws_id,
+                            f"feedback/{task_id}_feedback.md",
+                            judge_feedback,
+                        )
+                        last_issues = judge_feedback
+                        if attempt == 1:
+                            escalation_level = 1
+                        elif attempt == 2:
+                            escalation_level = 2
+                        continue  # Silent retry — user never sees the low-quality output
+
                 self._capture_knowledge(task_id, attempt, last_issues)
                 result = {
                     "task_id": task_id, "verdict": "pass",

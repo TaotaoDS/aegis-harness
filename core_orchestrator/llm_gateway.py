@@ -1,6 +1,9 @@
 """Minimal LLM gateway with PII sanitization and token overflow management.
 
 Flow: user_input -> sanitize -> [check token overflow -> compress history] -> llm -> response
+
+Layer 2 compaction: when a `summarizer_llm` is provided, old history entries are
+summarized by an LLM call instead of naive character truncation.
 """
 
 from typing import Callable, List, Optional
@@ -11,6 +14,12 @@ from .pii_sanitizer import Sanitizer, default_pipeline
 
 DEFAULT_MAX_TOKENS = 8192
 _THRESHOLD = 0.85
+
+_GATEWAY_SUMMARIZE_PROMPT = (
+    "Summarize the following conversation history into a concise briefing "
+    "(max 200 tokens). Preserve key facts, decisions, file names, and error messages. "
+    "Be factual and specific.\n\n"
+)
 
 
 def _mock_llm(text: str) -> str:
@@ -25,6 +34,19 @@ def _default_summarizer(text: str) -> str:
     if len(text) <= keep_chars:
         return text
     return text[:keep_chars] + "\n[TRUNCATED]"
+
+
+def _make_llm_summarizer(llm: Callable[[str], str]) -> Callable[[str], str]:
+    """Create a summarizer that uses an LLM to compress conversation history."""
+    def _summarize(text: str) -> str:
+        if len(text) <= 800:
+            return text
+        prompt = _GATEWAY_SUMMARIZE_PROMPT + text[:8000]
+        try:
+            return llm(prompt)
+        except Exception:
+            return _default_summarizer(text)
+    return _summarize
 
 
 # Module-level encoder (loaded once)
@@ -45,12 +67,18 @@ class LLMGateway:
         sanitizer: Optional[Sanitizer] = None,
         llm: Optional[Callable[[str], str]] = None,
         summarizer: Optional[Callable[[str], str]] = None,
+        summarizer_llm: Optional[Callable[[str], str]] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         threshold: float = _THRESHOLD,
     ):
         self._sanitizer = sanitizer or default_pipeline()
         self._llm = llm or _mock_llm
-        self._summarizer = summarizer or _default_summarizer
+        if summarizer:
+            self._summarizer = summarizer
+        elif summarizer_llm:
+            self._summarizer = _make_llm_summarizer(summarizer_llm)
+        else:
+            self._summarizer = _default_summarizer
         self._max_tokens = max_tokens
         self._threshold = threshold
         self._history: List[str] = []

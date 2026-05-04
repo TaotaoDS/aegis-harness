@@ -18,7 +18,11 @@ To add a new provider (e.g. Gemini):
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, TYPE_CHECKING, runtime_checkable
+
+if TYPE_CHECKING:
+    from .tool_output_store import ToolOutputStore
+    from .context_summarizer import ContextSummarizer
 
 # Callback type for handling tool calls during multi-turn loops.
 # Signature: (tool_name: str, arguments: Dict) -> str (JSON result content)
@@ -123,12 +127,20 @@ class OpenAIConnector:
         base_url: Optional[str] = None,
         max_rounds: int = 10,
         tool_handler: ToolHandler = None,
+        tool_output_store: Optional["ToolOutputStore"] = None,
+        context_summarizer: Optional["ContextSummarizer"] = None,
     ) -> List[ToolCall]:
         """Multi-turn tool loop. Returns all tool calls collected across rounds.
 
         If tool_handler is provided, it is called for each tool invocation
         and its return value is sent back to the model as the tool result.
         This enables tools like read_file to return real content.
+
+        If tool_output_store is provided, large tool results are evicted to disk
+        and only a head/tail preview is kept in the messages (Layer 1 compaction).
+
+        If context_summarizer is provided, early conversation rounds are compressed
+        when token usage approaches the context window limit (Layer 2 compaction).
         """
         OpenAI = self._import_openai()
         client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0, max_retries=1)
@@ -153,6 +165,10 @@ class OpenAIConnector:
         all_calls: List[ToolCall] = []
 
         for _ in range(max_rounds):
+            # Layer 2: compact messages if approaching context window limit
+            if context_summarizer and context_summarizer.should_compact(messages):
+                messages = context_summarizer.compact_messages(messages)
+
             resp = client.chat.completions.create(
                 model=model_id,
                 max_tokens=max_tokens,
@@ -211,6 +227,11 @@ class OpenAIConnector:
                         result_content = tool_handler(tc.function.name, tc_args)
                     else:
                         result_content = json.dumps({"status": "ok"})
+                    # Layer 1: evict large tool outputs to disk
+                    if tool_output_store:
+                        result_content = tool_output_store.maybe_evict(
+                            tc.id, result_content
+                        )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -276,11 +297,19 @@ class AnthropicConnector:
         base_url: Optional[str] = None,
         max_rounds: int = 10,
         tool_handler: ToolHandler = None,
+        tool_output_store: Optional["ToolOutputStore"] = None,
+        context_summarizer: Optional["ContextSummarizer"] = None,
     ) -> List[ToolCall]:
         """Multi-turn tool loop for Anthropic. Returns all tool calls.
 
         If tool_handler is provided, it is called for each tool invocation
         and its return value is sent back to the model as the tool result.
+
+        If tool_output_store is provided, large tool results are evicted to disk
+        and only a head/tail preview is kept in the messages (Layer 1 compaction).
+
+        If context_summarizer is provided, early conversation rounds are compressed
+        when token usage approaches the context window limit (Layer 2 compaction).
         """
         Anthropic = self._import_anthropic()
         client = Anthropic(api_key=api_key, base_url=base_url)
@@ -299,6 +328,12 @@ class AnthropicConnector:
         all_calls: List[ToolCall] = []
 
         for _ in range(max_rounds):
+            # Layer 2: compact messages if approaching context window limit
+            if context_summarizer and context_summarizer.should_compact(messages):
+                messages = context_summarizer.compact_messages(
+                    messages, keep_system=False
+                )
+
             msg = client.messages.create(
                 model=model_id,
                 max_tokens=max_tokens,
@@ -340,6 +375,11 @@ class AnthropicConnector:
                     result_content = tool_handler(b.name, b_args)
                 else:
                     result_content = json.dumps({"status": "ok"})
+                # Layer 1: evict large tool outputs to disk
+                if tool_output_store:
+                    result_content = tool_output_store.maybe_evict(
+                        b.id, result_content
+                    )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": b.id,

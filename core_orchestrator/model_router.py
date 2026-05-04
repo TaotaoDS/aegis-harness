@@ -491,6 +491,8 @@ class ModelRouter:
         tools: List[Dict[str, Any]],
         max_rounds: int = 10,
         tool_handler: ToolHandler = None,
+        tool_output_store=None,
+        context_summarizer=None,
     ) -> List[ToolCall]:
         """Call a model with Tool Use (Function Calling).
 
@@ -529,6 +531,8 @@ class ModelRouter:
             base_url=base_url,
             max_rounds=max_rounds,
             tool_handler=tool_handler,
+            tool_output_store=tool_output_store,
+            context_summarizer=context_summarizer,
         )
 
     # -----------------------------------------------------------------------
@@ -602,6 +606,8 @@ class ModelRouter:
         tools: List[Dict[str, Any]],
         max_rounds: int = 10,
         tool_handler: ToolHandler = None,
+        tool_output_store=None,
+        context_summarizer=None,
     ) -> List[ToolCall]:
         """call_with_tools() with the same multi-model failover semantics."""
         candidates = self._failover_candidates(preferred_model)
@@ -618,6 +624,8 @@ class ModelRouter:
                     tools=tools,
                     max_rounds=max_rounds,
                     tool_handler=tool_handler,
+                    tool_output_store=tool_output_store,
+                    context_summarizer=context_summarizer,
                 )
                 _health.record_success(model_name)
                 if model_name != preferred_model:
@@ -658,10 +666,13 @@ class ModelRouter:
 
         return _llm
 
-    def as_tool_llm(self, **context: str) -> Callable:
+    def as_tool_llm(self, tool_output_store=None, context_summarizer=None, **context: str) -> Callable:
         """Return a callable for Tool Use calls with failover.
 
         Signature: (system, user_prompt, tools, tool_handler=None) -> List[ToolCall]
+
+        If tool_output_store or context_summarizer are provided, they are passed
+        through to the connector for deep context compaction.
         """
         preferred = self.resolve(**context)
 
@@ -677,11 +688,13 @@ class ModelRouter:
                 user_prompt=user_prompt,
                 tools=tools,
                 tool_handler=tool_handler,
+                tool_output_store=tool_output_store,
+                context_summarizer=context_summarizer,
             )
 
         return _tool_llm
 
-    def as_escalated_tool_llm(self, skip_model: Optional[str] = None, **context: str) -> Callable:
+    def as_escalated_tool_llm(self, skip_model: Optional[str] = None, tool_output_store=None, context_summarizer=None, **context: str) -> Callable:
         """Return a tool_llm callable that skips ``skip_model`` (the failed preferred).
 
         Used by ResilienceManager for Layer-2 escalation: force a different model
@@ -710,6 +723,8 @@ class ModelRouter:
                 user_prompt=user_prompt,
                 tools=tools,
                 tool_handler=tool_handler,
+                tool_output_store=tool_output_store,
+                context_summarizer=context_summarizer,
             )
 
         return _escalated_tool_llm
