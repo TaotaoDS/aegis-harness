@@ -68,7 +68,12 @@ class TestDevMode:
         user = asyncio.get_event_loop().run_until_complete(
             deps_module.get_current_user(token=None)
         )
-        assert user.role      == "owner"
+        # DEV mode returns the bootstrap super_admin (highest privilege tier
+        # introduced in the role hierarchy refactor).  is_owner() returns True
+        # for both "super_admin" and "owner", so role-gating still works.
+        assert user.role      == "super_admin"
+        assert user.is_owner  is True
+        assert user.is_admin  is True
         assert user.user_id   == deps_module.BOOTSTRAP_USER_ID
         assert user.tenant_id == deps_module.BOOTSTRAP_TENANT_ID
 

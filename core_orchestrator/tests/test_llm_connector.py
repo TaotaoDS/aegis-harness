@@ -58,7 +58,9 @@ class TestOpenAIConnector:
                 max_tokens=100, temperature=0.7,
             )
         assert result == "hello from openai"
-        mock_client_cls.assert_called_once_with(api_key="sk-test", base_url=None)
+        mock_client_cls.assert_called_once_with(
+            api_key="sk-test", base_url=None, timeout=120.0, max_retries=1
+        )
 
     def test_call_forwards_base_url(self):
         mock_client_cls = MagicMock()
@@ -77,6 +79,7 @@ class TestOpenAIConnector:
         assert result == "deepseek says hi"
         mock_client_cls.assert_called_once_with(
             api_key="sk-ds", base_url="https://api.deepseek.com/v1",
+            timeout=120.0, max_retries=1,
         )
 
     def test_call_forwards_temperature(self):
@@ -223,6 +226,7 @@ class TestOpenAICompatibleProviders:
         # Client created with custom base_url
         mock_client_cls.assert_called_once_with(
             api_key="sk-ds", base_url="https://api.deepseek.com/v1",
+            timeout=120.0, max_retries=1,
         )
         # Model ID forwarded correctly
         create_kwargs = mock_client_cls.return_value.chat.completions.create.call_args[1]
@@ -242,4 +246,6 @@ class TestOpenAICompatibleProviders:
                 text="hi", max_tokens=100, temperature=0.7,
             )
         # base_url=None means use OpenAI default
-        mock_client_cls.assert_called_once_with(api_key="sk-test", base_url=None)
+        mock_client_cls.assert_called_once_with(
+            api_key="sk-test", base_url=None, timeout=120.0, max_retries=1
+        )

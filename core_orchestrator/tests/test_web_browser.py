@@ -138,11 +138,11 @@ class TestHtmlToText(unittest.TestCase):
 
 class TestSearchWeb(unittest.TestCase):
 
-    @patch("core_orchestrator.web_browser.time.sleep")
-    def test_happy_path_returns_valid_json(self, _sleep):
-        mock_launch, _, _, _ = _make_launch_mock()
-        with patch("core_orchestrator.web_browser._launch_browser", mock_launch):
-            result = search_web("python fastapi")
+    def test_happy_path_returns_valid_json(self):
+        """Happy path: engine='duckduckgo' via httpx scraper (no Playwright)."""
+        fake_results = [{"title": "Result Title", "url": "https://example.com/result", "snippet": ""}]
+        with patch("core_orchestrator.web_browser._search_duckduckgo", return_value=fake_results):
+            result = search_web("python fastapi", engine="duckduckgo")
 
         data = json.loads(result)
         assert "results" in data
@@ -151,47 +151,52 @@ class TestSearchWeb(unittest.TestCase):
         assert data["results"][0]["url"] == "https://example.com/result"
 
     def test_unsupported_engine_raises_not_retryable(self):
+        """An unrecognised engine name raises a non-retryable error immediately."""
         with pytest.raises(WebBrowserError) as exc_info:
-            search_web("query", engine="duckduckgo")
+            search_web("query", engine="google")
         assert exc_info.value.retryable is False
 
     @patch("core_orchestrator.web_browser.time.sleep")
     def test_navigation_failure_raises_retryable(self, _sleep):
+        """Sogou Playwright navigation failure → retryable error."""
         mock_launch, _, mock_context, _ = _make_launch_mock()
         mock_context.new_page.return_value.goto.side_effect = Exception("ERR_NAME_NOT_RESOLVED")
         with patch("core_orchestrator.web_browser._launch_browser", mock_launch):
             with pytest.raises(WebBrowserError) as exc_info:
-                search_web("query")
+                search_web("query", engine="sogou")
         assert exc_info.value.retryable is True
 
-    @patch("core_orchestrator.web_browser.time.sleep")
-    def test_no_results_raises_not_retryable(self, _sleep):
-        mock_launch, _, _, _ = _make_launch_mock(anchors=[])
-        with patch("core_orchestrator.web_browser._launch_browser", mock_launch):
+    def test_no_results_raises_not_retryable(self):
+        """engine='duckduckgo' returning empty list → non-retryable error."""
+        with patch("core_orchestrator.web_browser._search_duckduckgo", return_value=[]):
             with pytest.raises(WebBrowserError) as exc_info:
-                search_web("query")
+                search_web("query", engine="duckduckgo")
         assert exc_info.value.retryable is False
 
-    @patch("core_orchestrator.web_browser.time.sleep")
-    def test_num_results_capped_at_10(self, _sleep):
-        anchors = []
-        for i in range(20):
-            a = MagicMock()
-            a.inner_text.return_value = f"Title {i}"
-            a.get_attribute.return_value = f"https://example.com/{i}"
-            anchors.append(a)
+    def test_num_results_capped_at_10(self):
+        """num_results is capped at 10: search_web passes min(n,10) to the scraper.
 
-        mock_launch, _, _, _ = _make_launch_mock(anchors=anchors)
-        with patch("core_orchestrator.web_browser._launch_browser", mock_launch):
-            result = search_web("query", num_results=99)
+        The mock uses side_effect so it honours the num_results argument the same
+        way the real _search_duckduckgo does.  Even if the caller passes 99,
+        search_web clamps to 10 before calling the scraper, so the output is ≤ 10.
+        """
+        def fake_search(query, num_results):
+            return [
+                {"title": f"Title {i}", "url": f"https://example.com/{i}", "snippet": ""}
+                for i in range(num_results)
+            ]
+
+        with patch("core_orchestrator.web_browser._search_duckduckgo", side_effect=fake_search):
+            result = search_web("query", engine="duckduckgo", num_results=99)
 
         assert len(json.loads(result)["results"]) <= 10
 
     @patch("core_orchestrator.web_browser.time.sleep")
     def test_browser_closed_on_success(self, _sleep):
+        """Sogou (the one engine that still uses Playwright) closes browser on success."""
         mock_launch, mock_browser, mock_context, mock_pw = _make_launch_mock()
         with patch("core_orchestrator.web_browser._launch_browser", mock_launch):
-            search_web("query")
+            search_web("query", engine="sogou")
 
         mock_context.close.assert_called_once()
         mock_browser.close.assert_called_once()
@@ -199,11 +204,12 @@ class TestSearchWeb(unittest.TestCase):
 
     @patch("core_orchestrator.web_browser.time.sleep")
     def test_browser_closed_on_navigation_exception(self, _sleep):
+        """Sogou Playwright browser is still closed even when navigation raises."""
         mock_launch, mock_browser, mock_context, _ = _make_launch_mock()
         mock_context.new_page.return_value.goto.side_effect = Exception("fail")
         with patch("core_orchestrator.web_browser._launch_browser", mock_launch):
             with pytest.raises(WebBrowserError):
-                search_web("query")
+                search_web("query", engine="sogou")
 
         mock_context.close.assert_called_once()
         mock_browser.close.assert_called_once()
@@ -313,8 +319,9 @@ class TestToolDicts(unittest.TestCase):
         assert "url" in READ_URL_TOOL["parameters"]["required"]
 
     def test_search_web_engine_enum(self):
+        """Engine enum must include all supported engines (httpx + Playwright)."""
         props = SEARCH_WEB_TOOL["parameters"]["properties"]
-        assert set(props["engine"]["enum"]) == {"bing", "sogou"}
+        assert set(props["engine"]["enum"]) == {"auto", "bing", "duckduckgo", "sogou"}
 
     def test_num_results_bounds(self):
         props = SEARCH_WEB_TOOL["parameters"]["properties"]
