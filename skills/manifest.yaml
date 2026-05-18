@@ -11,3 +11,13 @@ skills:
   - architecture
   - fusion
   version: 1
+- category: python
+  created_from: reflection
+  file: skills/python/login-endpoint-returns-500.md
+  id: login-endpoint-returns-500
+  name: Login endpoint returns 500
+  source_solution: ec01cf91
+  triggers:
+  - python
+  - auth
+  version: 1

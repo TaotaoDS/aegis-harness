@@ -179,8 +179,14 @@ class ContextSummarizer:
 
     @staticmethod
     def _format_messages_for_summary(messages: List[Dict[str, Any]]) -> str:
-        """Convert messages to a readable text block for the summarizer LLM."""
+        """Convert messages to a readable text block for the summarizer LLM.
+
+        Tool results are aggressively compressed (200 chars) since their
+        diagnostic value decays quickly in older conversation rounds.
+        """
         lines = []
+        _TOOL_RESULT_MAX = 200
+        _TEXT_BLOCK_MAX = 300
         for msg in messages:
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
@@ -193,13 +199,13 @@ class ContextSummarizer:
                         if block.get("type") == "tool_result":
                             tid = block.get("tool_use_id", "?")
                             tc = block.get("content", "")
-                            text_parts.append(f"tool_result({tid}): {tc[:500]}")
+                            text_parts.append(f"tool_result({tid}): {tc[:_TOOL_RESULT_MAX]}")
                         elif block.get("type") == "tool_use":
                             text_parts.append(f"tool_use({block.get('name', '?')})")
                         else:
                             t = block.get("content", "") or block.get("text", "")
                             if isinstance(t, str):
-                                text_parts.append(t[:500])
+                                text_parts.append(t[:_TEXT_BLOCK_MAX])
                 lines.append(f"[{role}]: {' | '.join(text_parts)}")
 
         text = "\n".join(lines)

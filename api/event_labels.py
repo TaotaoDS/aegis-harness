@@ -66,6 +66,12 @@ EVENT_LABELS: Dict[str, str] = {
     "reflection.solution_saved":  "💡 Lesson learned: {problem}",
     "reflection.complete":        "📚 Post-mortem complete — {saved} lesson(s) saved",
 
+    # Experience Distiller (Compound Engineering)
+    "distiller.start":                "🧪 Running compound experience distillation…",
+    "distiller.enrichment_complete":  "🔬 Enrichment: {symptoms} symptoms, {failed_attempts} failures, {root_causes} root causes",
+    "distiller.indexed":              "📇 Indexed: {problem}",
+    "distiller.complete":             "🧬 Distillation complete — {saved} saved, {indexed} indexed",
+
     # CE Orchestrator
     "ce.analyzing":               "📊 Running retrospective analysis…",
     "ce.complete":                "📊 Retrospective report generated",

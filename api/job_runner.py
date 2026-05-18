@@ -353,8 +353,15 @@ def _run_build(job, ws, ws_id, gateway, tool_llm, bus, sanitizer, router, *, loo
     from core_orchestrator.solution_store import SolutionStore
     from core_orchestrator.skill_loader import SkillLoader
 
-    # ── Load workspace solutions (Compound Learning injection) ───────────
-    solutions_ctx = SolutionStore(ws, ws_id).format_as_context()
+    # ── Load workspace solutions (Compound Learning — hybrid retrieval) ──
+    try:
+        from core_orchestrator.experience_distiller import ExperienceDistiller
+        distiller = ExperienceDistiller(gateway=gateway, workspace=ws, workspace_id=ws_id)
+        solutions_ctx = distiller.retrieve_relevant(job.requirement, top_k=5)
+    except Exception:
+        solutions_ctx = ""
+    if not solutions_ctx:
+        solutions_ctx = SolutionStore(ws, ws_id).format_as_context()
 
     # ── SkillLoader (progressive disclosure) ─────────────────────────────
     skill_loader = SkillLoader(project_root=_HARNESS_ROOT)
@@ -425,7 +432,14 @@ def _run_update(job, ws, ws_id, gateway, tool_llm, bus, hitl, sanitizer, router,
     from core_orchestrator.solution_store import SolutionStore
     from core_orchestrator.skill_loader import SkillLoader
 
-    solutions_ctx = SolutionStore(ws, ws_id).format_as_context()
+    try:
+        from core_orchestrator.experience_distiller import ExperienceDistiller
+        distiller = ExperienceDistiller(gateway=gateway, workspace=ws, workspace_id=ws_id)
+        solutions_ctx = distiller.retrieve_relevant(job.requirement, top_k=5)
+    except Exception:
+        solutions_ctx = ""
+    if not solutions_ctx:
+        solutions_ctx = SolutionStore(ws, ws_id).format_as_context()
     skill_loader  = SkillLoader(project_root=_HARNESS_ROOT)
 
     ceo = CEOAgent(gateway=gateway, workspace=ws, workspace_id=ws_id)
@@ -590,17 +604,34 @@ def _run_fusion(job, ws, ws_id, tool_llm, bus, *, loop) -> None:
 # ---------------------------------------------------------------------------
 
 def _run_reflection(job, ws, ws_id, gateway, bus) -> None:
-    """Run ReflectionAgent to distil lessons from this job's event log."""
-    from core_orchestrator.reflection_agent import ReflectionAgent
+    """Run ExperienceDistiller for compound knowledge extraction.
 
+    Upgrades the basic ReflectionAgent with parallel sub-agent extraction,
+    deduplication, and cross-workspace indexing.  Falls back to the original
+    ReflectionAgent if the distiller fails to import.
+    """
     events_snapshot = list(bus.events_log)   # snapshot — pipeline is done
-    ra = ReflectionAgent(gateway=gateway, workspace=ws, workspace_id=ws_id)
-    ra.reflect(
-        events_log=events_snapshot,
-        requirement=job.requirement,
-        job_id=job.id,
-        bus=bus,
-    )
+
+    try:
+        from core_orchestrator.experience_distiller import ExperienceDistiller
+        distiller = ExperienceDistiller(
+            gateway=gateway, workspace=ws, workspace_id=ws_id,
+        )
+        distiller.distill(
+            events_log=events_snapshot,
+            requirement=job.requirement,
+            job_id=job.id,
+            bus=bus,
+        )
+    except ImportError:
+        from core_orchestrator.reflection_agent import ReflectionAgent
+        ra = ReflectionAgent(gateway=gateway, workspace=ws, workspace_id=ws_id)
+        ra.reflect(
+            events_log=events_snapshot,
+            requirement=job.requirement,
+            job_id=job.id,
+            bus=bus,
+        )
 
 
 class _RejectedError(Exception):

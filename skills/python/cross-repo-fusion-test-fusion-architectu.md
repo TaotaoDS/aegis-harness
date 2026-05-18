@@ -1,7 +1,7 @@
 ---
 category: python
 id: cross-repo-fusion-test-fusion-architectu
-source_solution: f4fdbf2f
+source_solution: 74c9a9b9
 triggers:
 - python
 - fastapi

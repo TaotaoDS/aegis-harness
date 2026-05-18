@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { TERMINAL_EVENTS } from "@/lib/eventLabels";
 
 export interface StreamEvent {
+  seq?: number;
   type: string;
   data: Record<string, unknown>;
   timestamp: string;
@@ -34,7 +35,7 @@ export function useEventStream(jobId: string): UseEventStreamResult {
   // so we never need to re-run the effect on every state change.
   const esRef   = useRef<EventSource | null>(null);
   const doneRef = useRef(false);
-  const seenRef = useRef(new Set<string>());
+  const seenRef = useRef(new Set<number | string>());
 
   const connect = useCallback(() => {
     if (doneRef.current) return;
@@ -56,8 +57,8 @@ export function useEventStream(jobId: string): UseEventStreamResult {
         return; // ignore malformed frames
       }
 
-      // De-duplicate: backend replays history on reconnect
-      const key = `${event.type}::${event.timestamp}`;
+      // De-duplicate: use monotonic seq ID when available, fall back to type::timestamp
+      const key = event.seq != null ? event.seq : `${event.type}::${event.timestamp}`;
       if (seenRef.current.has(key)) return;
       seenRef.current.add(key);
 

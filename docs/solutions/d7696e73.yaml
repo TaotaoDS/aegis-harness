@@ -1,0 +1,3 @@
+problem: Always use f-strings
+solution: Replace .format() calls
+type: best_practice

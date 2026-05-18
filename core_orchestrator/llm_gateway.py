@@ -110,8 +110,8 @@ class LLMGateway:
         recent_tokens = _count_tokens(recent_text)
         # Budget available for the summary
         summary_budget = max(token_limit - recent_tokens - 1, 0)
-        # Fast char-level estimate: tokens * 4 ≈ chars
-        keep_chars = summary_budget * 4
+        # cl100k_base averages ~3.7 chars/token; use 3.5 for safety margin
+        keep_chars = int(summary_budget * 3.5)
         summary = self._history[0]
         if keep_chars <= 0:
             self._history[0] = "[TRUNCATED]"

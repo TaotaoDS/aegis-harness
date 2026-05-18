@@ -10,6 +10,7 @@
 #   postgres   PostgreSQL 16 + pgvector extension  (port 5432)
 #   backend    FastAPI + Uvicorn                    (port 8000)
 #   frontend   Next.js (standalone)                (port 3000)
+#   vibevoice  VibeVoice TTS/ASR sidecar           (port 8100)
 #
 # Volumes:
 #   postgres_data   — DB files persist across restarts
@@ -50,6 +51,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      vibevoice:
+        condition: service_healthy
     environment:
       # ── Auth ─────────────────────────────────────────────────────────────
       SECRET_KEY: ${SECRET_KEY}
@@ -74,6 +77,10 @@ services:
       # Free tier: 2000 req/month — https://brave.com/search/api/
       BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
 
+      # ── Voice sidecar (VibeVoice TTS/ASR) ────────────────────────────
+      VOICE_SIDECAR_HOST: vibevoice
+      VOICE_SIDECAR_PORT: "8100"
+
       # ── Python path (avoid editable installs inside container) ────────
       PYTHONUNBUFFERED: "1"
     ports:
@@ -81,6 +88,26 @@ services:
     volumes:
       # Workspaces survive container rebuilds
       - workspaces:/app/workspaces
+
+  # --------------------------------------------------------------------------
+  # VibeVoice — TTS/ASR sidecar service
+  # --------------------------------------------------------------------------
+  vibevoice:
+    build:
+      context: ./services/vibevoice-sidecar
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      VIBEVOICE_MODE: ${VIBEVOICE_MODE:-mock}
+      VIBEVOICE_PORT: "8100"
+    ports:
+      - "${VIBEVOICE_PORT:-8100}:8100"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/healthz')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   # --------------------------------------------------------------------------
   # Frontend — Next.js standalone

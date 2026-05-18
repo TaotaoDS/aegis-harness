@@ -38,15 +38,9 @@ class CEOStateError(Exception):
 # ---------------------------------------------------------------------------
 
 _INTERVIEW_SYSTEM = """\
-You are a senior requirements analyst conducting a structured requirements
-interview. Your job is to ask ONE focused, specific clarifying question
-per round to build a complete understanding of the user's requirement.
+You are {role_description}. Ask ONE {question_style} question per round.
 
-Track your own confidence level (0–100%) across these dimensions:
-  • Core functionality scope
-  • Target users and deployment environment
-  • Key constraints (tech stack, performance, security, budget)
-  • Acceptance criteria and definition of done
+Track confidence (0–100%) across: scope, users/environment, constraints, done-criteria.
 
 Original requirement: {requirement}
 
@@ -54,66 +48,40 @@ Prior Q&A:
 {qa_context}
 
 {style_instructions}\
-Respond in strict JSON (no markdown fences):
-{{
-  "confidence": <integer 0-100>,
-  "question": "your next focused clarifying question",
-  "done": false
-}}
+Respond in strict JSON (no fences):
+{response_schema}
 
-When your confidence reaches 95 or higher, respond:
-{{
-  "confidence": 97,
-  "question": "",
-  "done": true
-}}
+When confidence ≥ 95: {{"confidence": 97, "question": "", {done_fields}"done": true}}
 
 Rules:
-- Ask exactly ONE question per round — specific and immediately answerable.
+- ONE question per round — specific and immediately answerable.
 - Raise confidence only when answers genuinely resolve ambiguities.
-- Never repeat a question already asked.
-- Cover the most impactful unknown first.
-- Always respond in the user's language.
+- Never repeat a question already asked. Cover the most impactful unknown first.
+- Always respond in the user's language.{extra_rules}
 - IRON RULE: set done=true ONLY when confidence ≥ 95.
 """
 
-# Non-technical users get an expanded response schema with optional options[]
-_INTERVIEW_SYSTEM_NON_TECH = """\
-You are a friendly assistant helping someone (who is NOT a programmer)
-describe what they want to build. Ask ONE simple, plain-English question
-per round.
+_TECH_INTERVIEW_VARS = {
+    "role_description": "a senior requirements analyst conducting a structured interview",
+    "question_style": "focused, specific clarifying",
+    "response_schema": '{{"confidence": <int 0-100>, "question": "your question", "done": false}}',
+    "done_fields": "",
+    "extra_rules": "",
+}
 
-Original requirement: {requirement}
+_NON_TECH_INTERVIEW_VARS = {
+    "role_description": "a friendly assistant helping a non-programmer describe what they want",
+    "question_style": "simple, plain-English",
+    "response_schema": (
+        '{{"confidence": <int 0-100>, "question": "≤ 2 sentences", '
+        '"options": ["A: ...", "B: ...", "C: ..."], "done": false}}'
+    ),
+    "done_fields": '"options": [], ',
+    "extra_rules": "\n- NO technical jargon. Options field is OPTIONAL — only when helpful.",
+}
 
-Prior Q&A:
-{qa_context}
-
-{style_instructions}\
-Respond in strict JSON (no markdown fences):
-{{
-  "confidence": <integer 0-100>,
-  "question": "your simple, plain-language question (≤ 2 sentences)",
-  "options": ["Option A: ...", "Option B: ...", "Option C: ..."],
-  "done": false
-}}
-
-The "options" field is OPTIONAL — include it only when offering concrete
-choices would genuinely help the user answer faster.
-
-When confidence ≥ 95:
-{{
-  "confidence": 97,
-  "question": "",
-  "options": [],
-  "done": true
-}}
-
-Rules:
-- NO technical jargon whatsoever (see style instructions above).
-- ONE question per round — short and immediately answerable.
-- Always respond in the user's language.
-- IRON RULE: set done=true ONLY when confidence ≥ 95.
-"""
+# Keep old name for backward compatibility in tests
+_INTERVIEW_SYSTEM_NON_TECH = _INTERVIEW_SYSTEM
 
 _PLAN_SYSTEM = """\
 You are a senior technical project manager. Decompose the following
@@ -271,16 +239,14 @@ class CEOAgent:
             self._user_profile.interview_style_instructions()
             if self._user_profile else ""
         )
-        template = (
-            _INTERVIEW_SYSTEM_NON_TECH
-            if (self._user_profile and self._user_profile.is_non_technical)
-            else _INTERVIEW_SYSTEM
+        is_non_tech = self._user_profile and self._user_profile.is_non_technical
+        vars_ = dict(_NON_TECH_INTERVIEW_VARS if is_non_tech else _TECH_INTERVIEW_VARS)
+        vars_.update(
+            requirement=self._requirement,
+            qa_context=self._format_qa_context(),
+            style_instructions=style,
         )
-        return template.format(
-            requirement       = self._requirement,
-            qa_context        = self._format_qa_context(),
-            style_instructions = style,
-        )
+        return _INTERVIEW_SYSTEM.format(**vars_)
 
     def _ask_llm_interview(self) -> dict:
         prompt = self._build_interview_prompt()
