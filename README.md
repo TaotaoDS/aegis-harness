@@ -1,14 +1,16 @@
 # AegisHarness
 
-**v0.2.0** · Production-grade AI Agent Harness — deterministic auth, multi-tenancy, semantic knowledge graph, generative UI, and MCP tool management for LLM workflows.
+**v0.3.0** · Production-grade AI Agent Harness — deterministic auth, multi-tenancy, semantic knowledge graph, generative UI, cross-repo fusion analysis, skill dynamic loading, and MCP tool management for LLM workflows.
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/) [![Next.js 15](https://img.shields.io/badge/next.js-15-black)](https://nextjs.org/) [![PostgreSQL 16](https://img.shields.io/badge/postgresql-16-336791)](https://www.postgresql.org/) [![Tests 598+](https://img.shields.io/badge/tests-598%2B%20passing-brightgreen)]() [![License MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/) [![Next.js 15](https://img.shields.io/badge/next.js-15-black)](https://nextjs.org/) [![PostgreSQL 16](https://img.shields.io/badge/postgresql-16-336791)](https://www.postgresql.org/) [![Tests 1094](https://img.shields.io/badge/tests-1094%20passing-brightgreen)]() [![License MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [English](./README.md) | [中文](./README.zh-CN.md)
 
 ---
 
 [Overview](#overview) · [Core Features](#core-features) · [Architecture](#architecture) · [Quick Start](#quick-start) · [Configuration](#configuration) · [Project Structure](#project-structure) · [Development](#development) · [Contributing](#contributing)
+
+> **What's new in v0.3.0** — Fusion Architect Agent for cross-repo analysis, Skill dynamic loading from compound knowledge, LLM-as-Judge quality gate, deep context compaction (tool output spill + LLM summarization), FinOps billing engine, sandbox isolation (ContentPreScreener + SandboxFactory), and security guardrails (PromptGuard + ContentModerator). 1094 tests passing.
 
 ---
 
@@ -26,6 +28,9 @@ Think of it as the harness around a racecar engine: the engine (LLM) is powerful
 | No fault tolerance | 3-layer fault-recovery loop — a single model failure never kills an entire pipeline |
 | No human oversight | HITL approval gates — sensitive writes and escalations pause for human confirmation |
 | No session continuity | PostgreSQL-backed chat history — conversations persist and resume across page reloads |
+| No quality assurance | LLM-as-Judge — hallucination / accuracy / relevance scoring before any output ships |
+| No cross-repo learning | Fusion Architect — clone, analyse, and synthesise architecture from multiple repositories |
+| No reusable skills | Skill dynamic loading — compound knowledge auto-promotes to discoverable Markdown skills |
 
 The result is a **deterministic harness around a non-deterministic core**: you own the workflow; the LLM writes the code.
 
@@ -177,6 +182,75 @@ curl -X POST http://localhost:8000/mcp/servers \
 curl -X POST http://localhost:8000/mcp/servers/{id}/probe
 ```
 
+### 7. Fusion Architect — Cross-Repository Analysis
+
+The Fusion Architect Agent clones multiple repositories, analyses their codebases, and synthesises a unified architecture report combining the best patterns from each.
+
+**Pipeline phases**
+
+| Phase | Tool | Description |
+|---|---|---|
+| 1 — Clone | `clone_repo` | Clone any HTTPS/SSH Git URL into an isolated sandbox (GitHub, GitLab, Hugging Face, private servers) |
+| 2 — Explore | `read_repo_file` / `glob_repo` / `grep_repo` / `analyze_ast` | Recursively read, search, and AST-analyse each codebase |
+| 3 — Synthesise | LLM | Produce a fusion architecture report combining the best elements |
+| 4 — Persist | `write_fusion_report` | Auto-promote the report to a reusable Markdown skill via ReflectionAgent |
+
+- **Universal Git Fetcher**: platform-agnostic — works with any Git host. Auth tokens are embedded in the clone URL and scrubbed from logs.
+- **Sandbox enforcement**: all file operations are confined to a single `repos_root` directory; path-traversal attempts raise `ValueError`.
+- **AST analysis**: Python files get full `ast` structural analysis (imports, classes, functions, call sites); other languages fall back to regex.
+
+### 8. Skill Dynamic Loading
+
+Compound knowledge automatically promotes to discoverable, reusable skills.
+
+- **SkillManifest** (`skills/manifest.yaml`): lightweight keyword index over all skill files. O(n) match at task arrival time.
+- **SkillLoader**: on-demand Markdown skill file reader. Only loads matched files — no noise injected when nothing matches.
+- **Compound knowledge → skill pipeline**: `ReflectionAgent` extracts lessons → promotes high-value patterns to `skills/{category}/` as Markdown files → updates the manifest → future CEO/Architect agents discover them via `SkillLoader.load_matched()`.
+- Graceful degradation: missing manifest or skill files silently return empty string.
+
+### 9. LLM-as-Judge Quality Gate
+
+A strong model scores every Agent output on three dimensions before it reaches the user:
+
+| Dimension | Score range | What it measures |
+|---|---|---|
+| **Hallucination** | 0.0–1.0 | Grounded in task/context vs. fabricated facts, non-existent APIs |
+| **Accuracy** | 0.0–1.0 | Correct implementation matching requirements |
+| **Relevance** | 0.0–1.0 | Directly addresses the task vs. off-topic |
+
+Scores below threshold trigger a silent retry via the existing resilience loop. Integration point: called after QA passes in `ResilienceManager.run_task_loop()`.
+
+### 10. Deep Context Compaction
+
+Three-layer system to keep multi-turn tool-use sessions within context window limits:
+
+| Layer | Module | Strategy |
+|---|---|---|
+| **1 — Tool Output Spill** | `tool_output_store.py` | Large tool results (>1200 chars) spill to disk; only head/tail preview stays in messages. Model can `recall_tool_output` if needed. |
+| **2 — LLM Summarization** | `context_summarizer.py` | When message history reaches 85% of context window, early rounds are summarised by an LLM into a compact paragraph preserving key decisions and facts. |
+| **3 — Task Handoff Compression** | `context_compressor.py` | On mid-task model switch, builds a compact briefing (~1200 chars) with goal, completed files, error summary, and continuation instruction. |
+
+### 11. Security & Sandbox
+
+**Sandbox Isolation** (`sandbox.py`)
+- `ContentPreScreener.check_file()` screens files before execution
+- `SandboxFactory` creates `ResourceLimitSandbox` (local) or `DockerSandbox` (containers)
+- Direct `subprocess.run()` on generated code is forbidden
+
+**Security Guardrails** (`guardrails.py`)
+- `PromptGuard.check_input()` detects prompt injection patterns in task inputs
+- `ContentModerator.screen_output()` screens LLM-generated file content for credentials and payloads
+- `GuardRailViolation` is non-retryable — bypasses the resilience retry loop
+
+### 12. FinOps Billing Engine
+
+Per-tenant credit-based billing with thread-local side-channel:
+
+1. `job_runner` loads tenant `credit_balance` and installs a `BillingContext` before pipeline start
+2. After each LLM API call, the connector records a `LLMUsage` event
+3. `ModelRouter` calls `check_credit()` before each API call — raises `InsufficientCreditError` (HTTP 402) if balance exhausted
+4. On pipeline completion, `flush_context()` persists billing events and deducts from credit balance
+
 ---
 
 ## Architecture
@@ -222,6 +296,9 @@ curl -X POST http://localhost:8000/mcp/servers/{id}/probe
 │                └─► QAAgent     (code review)                         │
 │                      └─► ReflectionAgent (lesson extraction)         │
 │                                                                      │
+│  FusionArchitect   (cross-repo clone → explore → synthesise → skill)│
+│  SkillLoader       (manifest keyword match → on-demand Markdown)    │
+│  Judge             (LLM-as-Judge: hallucination/accuracy/relevance) │
 │  ModelRouter       (YAML routing · 30 s cache · ${VAR} interpolation)│
 │  LLMConnector      (OpenAI / Anthropic adapter protocol · urllib)   │
 │  ParallelExecutor  (Kahn BFS waves · ThreadPoolExecutor)            │
@@ -229,8 +306,15 @@ curl -X POST http://localhost:8000/mcp/servers/{id}/probe
 │  HITLManager       (sensitive file gate · update-mode gate)         │
 │  MCPManager        (hot-plug · per-tenant · urllib probe)           │
 │  KnowledgeIngestion(PDF/URL → Markdown → concepts → graph → embed) │
+│  KnowledgeRetriever(pre-task solution injection · keyword fallback) │
 │  VectorStore       (pgvector upsert · Python cosine fallback)       │
 │  SolutionStore     (YAML lesson library · workspace-scoped)         │
+│  ToolOutputStore   (large tool result spill-to-disk + recall)       │
+│  ContextSummarizer (LLM-powered conversation compaction at 85%)     │
+│  ContextCompressor (compact briefing for mid-task model switch)     │
+│  Sandbox           (ContentPreScreener + SandboxFactory)            │
+│  Guardrails        (PromptGuard + ContentModerator)                 │
+│  BillingEngine     (per-tenant credit limits · thread-local usage)  │
 │  PIISanitizer      (composable redaction pipeline)                  │
 └───────────────────────┬─────────────────────────────────────────────┘
                         │  asyncpg · SQLAlchemy 2.0 async
@@ -428,12 +512,15 @@ Set `embedding.provider: ollama` in `models_config.yaml` and point all model rou
 
 ```
 enterprise-harness/
-├── core_orchestrator/         # Pure Python business logic
+├── core_orchestrator/         # Pure Python business logic (36 modules)
 │   ├── ceo_agent.py           # Clarifying interview (≥95% confidence threshold)
 │   ├── architect_agent.py     # Code generation via tool-use LLM
+│   ├── fusion_architect_agent.py  # Cross-repo architecture analysis + synthesis
+│   ├── git_fetcher.py         # Universal Git clone + 5 code analysis tools
 │   ├── qa_agent.py            # Code review agent
 │   ├── evaluator.py           # Sandbox: ast · pyflakes · subprocess
-│   ├── reflection_agent.py    # Lesson extraction → SolutionStore
+│   ├── reflection_agent.py    # Lesson extraction → SolutionStore → Skill promotion
+│   ├── judge.py               # LLM-as-Judge (hallucination/accuracy/relevance)
 │   ├── ce_orchestrator.py     # Pipeline coordinator (CEO→Architect→QA→Reflect)
 │   ├── resilience_manager.py  # 3-layer escalation + token budget circuit breaker
 │   ├── parallel_executor.py   # Kahn BFS wave scheduler + ThreadPoolExecutor
@@ -441,17 +528,25 @@ enterprise-harness/
 │   ├── model_router.py        # YAML-driven multi-provider routing (30 s TTL cache)
 │   ├── llm_connector.py       # OpenAI / Anthropic adapter protocol + registry
 │   ├── llm_gateway.py         # Translation gateway (auto-detects language)
+│   ├── skill_loader.py        # SkillManifest keyword match + on-demand Markdown loader
 │   ├── mcp_manager.py         # Hot-plug MCP server registry (urllib probe)
 │   ├── knowledge_ingestion.py # PDF/URL → Markdown → concepts → graph → embeddings
 │   ├── knowledge_manager.py   # Knowledge graph CRUD + semantic search
+│   ├── knowledge_retriever.py # Pre-task solution injection (vector + keyword)
 │   ├── vector_store.py        # pgvector upsert + Python cosine similarity fallback
 │   ├── solution_store.py      # YAML lesson library (workspace-scoped)
+│   ├── tool_output_store.py   # Large tool output spill-to-disk + recall
+│   ├── context_compressor.py  # Compact briefing for mid-task model switch
+│   ├── context_summarizer.py  # LLM-powered conversation compaction
+│   ├── sandbox.py             # ContentPreScreener + SandboxFactory (Docker/local)
+│   ├── guardrails.py          # PromptGuard + ContentModerator
+│   ├── billing.py             # FinOps billing engine (per-tenant credit limits)
 │   ├── pii_sanitizer.py       # Composable PII redaction pipeline
 │   ├── web_browser.py         # Headless web page fetch + content extraction
 │   ├── web_crawler.py         # URL → Markdown via markdownify
-│   └── tests/                 # 598+ pytest tests across all modules
+│   └── tests/                 # 1094 pytest tests across all modules
 │
-├── api/                       # FastAPI application
+├── api/                       # FastAPI application (12 route modules)
 │   ├── main.py                # App factory · lifespan hooks · CORS · crash recovery
 │   ├── auth.py                # JWT creation/validation · DEV_MODE logic
 │   ├── deps.py                # FastAPI Depends: CurrentUser · require_admin · require_owner
@@ -462,26 +557,21 @@ enterprise-harness/
 │   ├── hitl_manager.py        # HITL gate: sensitive file + update-mode approval
 │   ├── interview_manager.py   # CEO interview answer bridge (agent ↔ API)
 │   ├── key_injector.py        # DB api_keys → os.environ bridge (no restart needed)
+│   ├── metrics.py             # Prometheus metrics registry + /metrics endpoint
+│   ├── quota.py               # QuotaManager — per-tenant daily token budget
+│   ├── rate_limit.py          # slowapi Limiter (10/min auth, 60/min jobs)
 │   ├── settings_service.py    # Settings CRUD (PostgreSQL backed)
 │   └── routes/                # auth · jobs · stream · approvals · interview
 │                              # knowledge · settings · mcp · console · setup · admin
 │
 ├── db/                        # Database layer
-│   ├── models.py              # SQLAlchemy ORM (12 tables)
+│   ├── models.py              # SQLAlchemy ORM (12+ tables)
 │   ├── repository.py          # Async CRUD — all functions accept AsyncSession
 │   ├── connection.py          # asyncpg engine · session factory · URL normalisation
-│   └── migrations/            # Alembic revisions 001–011
-│       ├── 001_initial_schema.py
-│       ├── 002_add_embedding_column.py
-│       ├── 003_add_auth_tables.py
-│       ├── 004_add_workspaces.py
-│       ├── 005_tenant_scope_existing_tables.py
-│       ├── 006_tenant_quotas.py
-│       ├── 007_billing_tables.py
-│       ├── 008_superadmin_setup.py
-│       ├── 009_graph_tables.py
-│       ├── 010_resize_embedding_vector.py
-│       └── 011_chat_sessions.py
+│   └── migrations/            # Alembic revisions 001–011 (11 migrations)
+│       ├── 001–005            # Core schema, embeddings, auth, workspaces, tenant scope
+│       ├── 006–008            # Tenant quotas, billing tables, superadmin setup
+│       └── 009–011            # Knowledge graph tables, vector resize, chat sessions
 │
 ├── web/                       # Next.js 15 frontend
 │   ├── app/
@@ -521,6 +611,14 @@ enterprise-harness/
 │   └── hooks/
 │       └── useApproval.ts     # HITL approval polling hook
 │
+├── skills/                    # Reusable Markdown skill files (auto-promoted from knowledge)
+│   ├── manifest.yaml          # Keyword index for SkillLoader fast matching
+│   ├── python/                # Python / FastAPI / architecture skills
+│   ├── frontend/              # React / Next.js skills
+│   ├── database/              # SQL / migration skills
+│   ├── devops/                # Docker / CI / deployment skills
+│   └── architecture/          # Cross-repo fusion architecture reports
+│
 ├── workspaces/                # Generated code artifacts (volume-mounted · git-ignored)
 ├── knowledge_base/            # Curated lesson library (pre-seeded)
 ├── models_config.yaml         # LLM routing configuration (18+ providers pre-configured)
@@ -540,16 +638,19 @@ enterprise-harness/
 ### Running Tests
 
 ```bash
-pytest                           # all tests
+pytest                           # all 1094 tests
 pytest core_orchestrator/tests/  # orchestrator unit tests only
 pytest -k test_resilience        # filter by name
+pytest -k test_fusion            # fusion architect + git fetcher tests
+pytest -k test_skill             # skill loader tests
+pytest -k test_judge             # LLM-as-Judge tests
 pytest --cov=core_orchestrator --cov-report=term-missing  # coverage report
 ```
 
 ### Database Migrations
 
 ```bash
-alembic upgrade head                                  # apply all pending migrations (001–011)
+alembic upgrade head                                  # apply all 11 pending migrations
 alembic revision --autogenerate -m "describe change"  # generate a new revision
 alembic downgrade -1                                  # roll back one revision
 alembic current                                       # show current revision
@@ -585,7 +686,7 @@ alembic current                                       # show current revision
 
 **Zero blast radius** — every change must leave the system at least as functional as before.
 
-- **Test-first**: Add or update tests before touching production code. The test suite is the regression gate; all tests must pass before any merge.
+- **Test-first**: Add or update tests before touching production code. The 1094-test suite is the regression gate; all tests must pass before any merge.
 - **Graceful degradation**: If you introduce an optional dependency, the system must work correctly when that dependency is absent. Use the `tenacity` and `pgvector` integrations as reference patterns.
 - **No global state**: All mutations are scoped to a workspace or tenant. Thread safety is assumed only within a single task's execution context.
 - **Preserve API contracts**: Backend route signatures and SSE event shapes are consumed by the frontend. Breaking changes require coordinated updates to both layers.
